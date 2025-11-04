@@ -245,6 +245,69 @@ class PlayerCommands(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name="submitpoints", description="Submit your points after a match")
+    @app_commands.describe(points="Points you earned in the match")
+    async def submit_points(self, interaction: discord.Interaction, points: int):
+        """Submit match points"""
+        if points < 0:
+            await interaction.response.send_message(
+                "❌ Points cannot be negative!",
+                ephemeral=True
+            )
+            return
+
+        # Find match awaiting points
+        match = await db.db.matches.find_one({'status': 'awaiting_points'})
+
+        if not match:
+            await interaction.response.send_message(
+                "❌ No match is currently accepting point submissions!",
+                ephemeral=True
+            )
+            return
+
+        # Check if player was in this match
+        all_players = match['team1'] + match['team2']
+        player_in_match = any(p['user_id'] == interaction.user.id for p in all_players)
+
+        if not player_in_match:
+            await interaction.response.send_message(
+                "❌ You were not in this match!",
+                ephemeral=True
+            )
+            return
+
+        # Check if already submitted
+        points_submitted = match.get('points_submitted', {})
+        if str(interaction.user.id) in points_submitted:
+            await interaction.response.send_message(
+                f"⚠️ You already submitted {points_submitted[str(interaction.user.id)]} points!",
+                ephemeral=True
+            )
+            return
+
+        # Submit points
+        points_submitted[str(interaction.user.id)] = points
+        await db.update_match(match['_id'], {'points_submitted': points_submitted})
+
+        submitted_count = len(points_submitted)
+        total_count = len(all_players)
+
+        await interaction.response.send_message(
+            f"✅ Points submitted: {points}\n"
+            f"({submitted_count}/{total_count} players have submitted)",
+            ephemeral=True
+        )
+
+        # Notify if all points submitted
+        if submitted_count == total_count:
+            channel = interaction.channel
+            admin_role = discord.utils.get(interaction.guild.roles, name=config.ADMIN_ROLE_NAME)
+            if admin_role and channel:
+                await channel.send(
+                    f"{admin_role.mention} All players have submitted their points! "
+                    f"Use `/verifypoints` to finalize the match."
+                )
 
 async def setup(bot):
     """Load the cog"""
