@@ -29,11 +29,21 @@ async def on_ready():
         await db.set_system_setting('matchmaking_enabled', False)
 
     # Load cogs (command modules)
-    await bot.load_extension('cogs.player')
-    await bot.load_extension('cogs.matchmaking')
-    await bot.load_extension('cogs.admin')
+    try:
+        await bot.load_extension('cogs.player')
+        await bot.load_extension('cogs.matchmaking')
+        await bot.load_extension('cogs.admin')
+        print('✅ All cogs loaded')
+    except Exception as e:
+        print(f"❌ Error loading cogs: {e}")
+        return
 
-    print('✅ All cogs loaded')
+    # Sync commands ONCE after all cogs are loaded
+    try:
+        synced = await bot.tree.sync()
+        print(f'✅ Synced {len(synced)} slash commands')
+    except Exception as e:
+        print(f'❌ Failed to sync commands: {e}')
 
 @bot.command(name='sync')
 @commands.is_owner()

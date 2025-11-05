@@ -312,6 +312,4 @@ class PlayerCommands(commands.Cog):
 async def setup(bot):
     """Load the cog"""
     await bot.add_cog(PlayerCommands(bot))
-    # Sync slash commands
-    await bot.tree.sync()
     print("✅ Player commands loaded")
