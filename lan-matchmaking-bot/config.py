@@ -8,6 +8,7 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 MONGODB_URI = os.getenv('MONGODB_URI')
 GUILD_ID = int(os.getenv('GUILD_ID'))
 ADMIN_ROLE_NAME = os.getenv('ADMIN_ROLE_NAME', 'Admin')
+BOT_OWNER_ID = int(os.getenv('BOT_OWNER_ID', 0))
 
 # Matchmaking Configuration
 TEAM_SIZE = 3  # 3v3 matches

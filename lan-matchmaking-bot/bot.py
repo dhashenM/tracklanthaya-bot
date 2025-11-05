@@ -35,6 +35,17 @@ async def on_ready():
 
     print('✅ All cogs loaded')
 
+@bot.command(name='sync')
+@commands.is_owner()
+async def sync(ctx):
+    """Manually sync slash commands (bot owner only)"""
+    try:
+        synced = await bot.tree.sync()
+        await ctx.send(f"✅ Synced {len(synced)} command(s)")
+        print(f"Synced {len(synced)} commands")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to sync: {e}")
+        print(f"Sync error: {e}")
 
 @bot.event
 async def on_command_error(ctx, error):

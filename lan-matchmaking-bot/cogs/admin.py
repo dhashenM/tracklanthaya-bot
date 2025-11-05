@@ -393,6 +393,23 @@ class AdminCommands(commands.Cog):
         embed.description = description
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name="checkadmin", description="Check if you have admin access")
+    async def check_admin(self, interaction: discord.Interaction):
+        """Check admin status"""
+        admin_role = discord.utils.get(interaction.user.roles, name=config.ADMIN_ROLE_NAME)
+
+        if admin_role:
+            await interaction.response.send_message(
+                f"✅ You have the '{config.ADMIN_ROLE_NAME}' role!",
+                ephemeral=True
+            )
+        else:
+            roles = [role.name for role in interaction.user.roles if role.name != "@everyone"]
+            await interaction.response.send_message(
+                f"❌ You don't have the '{config.ADMIN_ROLE_NAME}' role.\n"
+                f"Your roles: {', '.join(roles) if roles else 'None'}",
+                ephemeral=True
+            )
 
 async def setup(bot):
     """Load the cog"""
