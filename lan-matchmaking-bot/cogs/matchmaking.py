@@ -6,6 +6,7 @@ from utils.matchmaking_logic import create_match_from_queue
 import config
 from datetime import datetime, timedelta
 import asyncio
+from utils.channel_manager import get_channel_manager
 
 
 class MatchmakingCommands(commands.Cog):
@@ -79,6 +80,10 @@ class MatchmakingCommands(commands.Cog):
 
     async def notify_admin_new_match(self, guild, match):
         """Notify admin about new match"""
+        # Update upcoming matches channel
+        cm = get_channel_manager(self.bot)
+        await cm.update_upcoming_matches(guild)
+
         # Find admin role
         admin_role = discord.utils.get(guild.roles, name=config.ADMIN_ROLE_NAME)
 

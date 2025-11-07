@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import config
 from utils.database import db
+from utils.channel_manager import get_channel_manager
 import asyncio
 
 # Bot intents (permissions)
@@ -44,6 +45,11 @@ async def on_ready():
         print(f'✅ Synced {len(synced)} slash commands')
     except Exception as e:
         print(f'❌ Failed to sync commands: {e}')
+
+    # Setup info channels
+    for guild in bot.guilds:
+        cm = get_channel_manager(bot)
+        await cm.setup_channels(guild)
 
 @bot.command(name='sync')
 @commands.is_owner()

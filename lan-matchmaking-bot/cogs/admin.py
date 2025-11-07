@@ -4,6 +4,7 @@ from discord import app_commands
 from utils.database import db
 import config
 from bson import ObjectId
+from utils.channel_manager import get_channel_manager
 
 
 def is_admin():
@@ -23,6 +24,7 @@ class AdminCommands(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="enablematchmaking", description="[ADMIN] Enable matchmaking")
+    @app_commands.default_permissions(administrator=True)
     @is_admin()
     async def enable_matchmaking(self, interaction: discord.Interaction):
         """Enable matchmaking system"""
@@ -30,6 +32,7 @@ class AdminCommands(commands.Cog):
         await interaction.response.send_message("✅ Matchmaking has been enabled!")
 
     @app_commands.command(name="disablematchmaking", description="[ADMIN] Disable matchmaking")
+    @app_commands.default_permissions(administrator=True)
     @is_admin()
     async def disable_matchmaking(self, interaction: discord.Interaction):
         """Disable matchmaking system"""
@@ -38,6 +41,7 @@ class AdminCommands(commands.Cog):
 
     @app_commands.command(name="setpoints", description="[ADMIN] Set a player's points")
     @app_commands.describe(member="The player", points="New point value")
+    @app_commands.default_permissions(administrator=True)
     @is_admin()
     async def set_points(self, interaction: discord.Interaction, member: discord.Member, points: int):
         """Set player points"""
@@ -56,6 +60,7 @@ class AdminCommands(commands.Cog):
         )
 
     @app_commands.command(name="startmatch", description="[ADMIN] Start the pending match")
+    @app_commands.default_permissions(administrator=True)
     @is_admin()
     async def start_match(self, interaction: discord.Interaction):
         """Start pending match"""
@@ -114,11 +119,17 @@ class AdminCommands(commands.Cog):
                 except:
                     pass
 
+        # Update channels
+        cm = get_channel_manager(self.bot)
+        await cm.update_upcoming_matches(interaction.guild)
+        await cm.update_queue(interaction.guild)
+
         # Check queue for next match
         if matchmaking_cog:
             await matchmaking_cog.check_and_create_match(interaction.guild)
 
     @app_commands.command(name="cancelmatch", description="[ADMIN] Cancel the pending match")
+    @app_commands.default_permissions(administrator=True)
     @is_admin()
     async def cancel_match(self, interaction: discord.Interaction):
         """Cancel pending match"""
@@ -144,24 +155,33 @@ class AdminCommands(commands.Cog):
             await matchmaking_cog.check_and_create_match(interaction.guild)
 
     @app_commands.command(name="endmatch", description="[ADMIN] End the active match")
+    @app_commands.default_permissions(administrator=True)
     @is_admin()
     async def end_match(self, interaction: discord.Interaction):
         """End active match"""
+        await interaction.response.defer()
+
         active_match = await db.get_active_match()
 
         if not active_match:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ No active match to end!",
                 ephemeral=True
             )
             return
+
+        # Calculate deadline (10 minutes from now)
+        from datetime import datetime, timedelta
+        deadline = datetime.utcnow() + timedelta(seconds=config.POINTS_ENTRY_TIMEOUT)
+        deadline_timestamp = int(deadline.timestamp())
 
         # Update match status
         await db.update_match(
             active_match['_id'],
             {
                 'status': 'awaiting_points',
-                'ended_at': discord.utils.utcnow()
+                'ended_at': discord.utils.utcnow(),
+                'points_deadline': deadline
             }
         )
 
@@ -170,11 +190,14 @@ class AdminCommands(commands.Cog):
 
         embed = discord.Embed(
             title="🏁 Match Ended!",
-            description="Please submit your points using `/submitpoints <your_points>`",
+            description=(
+                f"Please submit your points using `/submitpoints <your_points>`\n\n"
+                f"⏰ **Deadline:** <t:{deadline_timestamp}:R> (<t:{deadline_timestamp}:t>)"
+            ),
             color=discord.Color.blue()
         )
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
         for player in all_players:
             member = interaction.guild.get_member(player['user_id'])
@@ -183,6 +206,10 @@ class AdminCommands(commands.Cog):
                     await member.send(embed=embed)
                 except:
                     pass
+
+        # Update channels
+        cm = get_channel_manager(self.bot)
+        await cm.update_upcoming_matches(interaction.guild)
 
         # Start points entry timer
         matchmaking_cog = self.bot.get_cog('MatchmakingCommands')
@@ -193,6 +220,7 @@ class AdminCommands(commands.Cog):
             )
 
     @app_commands.command(name="verifypoints", description="[ADMIN] Verify and finalize match points")
+    @app_commands.default_permissions(administrator=True)
     @is_admin()
     async def verify_points(self, interaction: discord.Interaction):
         """Verify points for completed match"""
@@ -286,6 +314,12 @@ class AdminCommands(commands.Cog):
         # Use followup instead of response
         await interaction.followup.send(embed=embed)
 
+        # Update all info channels
+        cm = get_channel_manager(self.bot)
+        await cm.update_leaderboard(interaction.guild)
+        await cm.update_match_history(interaction.guild)
+        await cm.update_upcoming_matches(interaction.guild)
+
         # Check queue for next match
         if matchmaking_cog:
             await matchmaking_cog.check_and_create_match(interaction.guild)
@@ -295,6 +329,7 @@ class AdminCommands(commands.Cog):
         p1="Player 1", p2="Player 2", p3="Player 3",
         p4="Player 4", p5="Player 5", p6="Player 6"
     )
+    @app_commands.default_permissions(administrator=True)
     @is_admin()
     async def custom_match(
             self,
@@ -353,6 +388,7 @@ class AdminCommands(commands.Cog):
 
     @app_commands.command(name="resetplayer", description="[ADMIN] Reset a player's stats")
     @app_commands.describe(member="The player to reset")
+    @app_commands.default_permissions(administrator=True)
     @is_admin()
     async def reset_player(self, interaction: discord.Interaction, member: discord.Member):
         """Reset player stats"""
@@ -378,6 +414,7 @@ class AdminCommands(commands.Cog):
         )
 
     @app_commands.command(name="listplayers", description="[ADMIN] List all registered players")
+    @app_commands.default_permissions(administrator=True)
     @is_admin()
     async def list_players(self, interaction: discord.Interaction):
         """List all players"""
@@ -405,19 +442,20 @@ class AdminCommands(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="checkadmin", description="Check if you have admin access")
+    @app_commands.default_permissions(administrator=True)
     async def check_admin(self, interaction: discord.Interaction):
         """Check admin status"""
         admin_role = discord.utils.get(interaction.user.roles, name=config.ADMIN_ROLE_NAME)
 
         if admin_role:
             await interaction.response.send_message(
-                f"✅ You have the '{config.ADMIN_ROLE_NAME}' role!",
+                f"✅ Umba amu pakaya! You have the '{config.ADMIN_ROLE_NAME}' role!",
                 ephemeral=True
             )
         else:
             roles = [role.name for role in interaction.user.roles if role.name != "@everyone"]
             await interaction.response.send_message(
-                f"❌ You don't have the '{config.ADMIN_ROLE_NAME}' role.\n"
+                f"❌ Palayan hutho yanna umbata '{config.ADMIN_ROLE_NAME}' access dhenna. Lolla.\n"
                 f"Your roles: {', '.join(roles) if roles else 'None'}",
                 ephemeral=True
             )

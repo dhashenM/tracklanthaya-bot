@@ -21,3 +21,10 @@ POINTS_ENTRY_TIMEOUT = 600  # 10 minutes in seconds
 MATCH_CATEGORY_NAME = "Active Matches"
 TEAM1_CHANNEL_NAME = "🔴 Team 1"
 TEAM2_CHANNEL_NAME = "🔵 Team 2"
+
+# Auto-update Channel Names
+QUEUE_CHANNEL_NAME = "🎮│queue"
+LEADERBOARD_CHANNEL_NAME = "🏆│leaderboard"
+MATCH_HISTORY_CHANNEL_NAME = "📜│match-history"
+UPCOMING_MATCHES_CHANNEL_NAME = "⏳│upcoming-matches"
+INFO_CATEGORY_NAME = "📊 Match Info"

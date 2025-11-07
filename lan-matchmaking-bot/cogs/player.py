@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 from utils.database import db
 import config
+from utils.channel_manager import get_channel_manager
 
 
 class PlayerCommands(commands.Cog):
@@ -68,7 +69,6 @@ class PlayerCommands(commands.Cog):
             )
             return
 
-        # Check if matchmaking is enabled
         matchmaking_enabled = await db.get_system_setting('matchmaking_enabled')
         if not matchmaking_enabled:
             await interaction.response.send_message(
@@ -84,7 +84,6 @@ class PlayerCommands(commands.Cog):
             )
             return
 
-        # Check if player is in an active match
         active_match = await db.get_active_match()
         if active_match:
             all_player_ids = [p['user_id'] for p in active_match['team1'] + active_match['team2']]
@@ -100,6 +99,10 @@ class PlayerCommands(commands.Cog):
             "✅ You are now online and in the matchmaking queue!",
             ephemeral=True
         )
+
+        # Update queue channel
+        cm = get_channel_manager(self.bot)
+        await cm.update_queue(interaction.guild)
 
         # Trigger matchmaking check
         matchmaking_cog = self.bot.get_cog('MatchmakingCommands')
@@ -131,6 +134,10 @@ class PlayerCommands(commands.Cog):
             ephemeral=True
         )
 
+        # Update queue channel
+        cm = get_channel_manager(self.bot)
+        await cm.update_queue(interaction.guild)
+
     @app_commands.command(name="profile", description="View your profile")
     async def profile(self, interaction: discord.Interaction, member: discord.Member = None):
         """View player profile"""
@@ -155,8 +162,9 @@ class PlayerCommands(commands.Cog):
         embed.add_field(name="Wins", value=player['wins'], inline=True)
         embed.add_field(name="Losses", value=player['losses'], inline=True)
 
-        await interaction.response.send_message(embed=embed)
-
+        # Always send as ephemeral (private)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    '''
     @app_commands.command(name="leaderboard", description="View the top players")
     async def leaderboard(self, interaction: discord.Interaction):
         """Display leaderboard"""
@@ -244,6 +252,7 @@ class PlayerCommands(commands.Cog):
             embed.add_field(name="📜 Recent Matches", value=history_text or "None", inline=False)
 
         await interaction.response.send_message(embed=embed)
+    '''
 
     @app_commands.command(name="submitpoints", description="Submit your points after a match")
     @app_commands.describe(points="Points you earned in the match")
