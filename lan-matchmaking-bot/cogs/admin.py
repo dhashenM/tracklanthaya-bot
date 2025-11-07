@@ -59,10 +59,13 @@ class AdminCommands(commands.Cog):
     @is_admin()
     async def start_match(self, interaction: discord.Interaction):
         """Start pending match"""
+        # Defer immediately - gives us 15 minutes to respond
+        await interaction.response.defer()
+
         pending_match = await db.get_pending_match()
 
         if not pending_match:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ No pending match to start!",
                 ephemeral=True
             )
@@ -99,7 +102,8 @@ class AdminCommands(commands.Cog):
         embed.add_field(name="🔴 Team 1", value=team1_names, inline=False)
         embed.add_field(name="🔵 Team 2", value=team2_names, inline=False)
 
-        await interaction.response.send_message(embed=embed)
+        # Use followup instead of response
+        await interaction.followup.send(embed=embed)
 
         # Notify players via DM
         for player in all_players:
@@ -192,11 +196,14 @@ class AdminCommands(commands.Cog):
     @is_admin()
     async def verify_points(self, interaction: discord.Interaction):
         """Verify points for completed match"""
+        # Defer immediately
+        await interaction.response.defer()
+
         # Find match awaiting points
         match = await db.db.matches.find_one({'status': 'awaiting_points'})
 
         if not match:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ No match awaiting point verification!",
                 ephemeral=True
             )
@@ -212,7 +219,7 @@ class AdminCommands(commands.Cog):
                 if str(player['user_id']) not in points_submitted:
                     missing.append(player['username'])
 
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"⚠️ Not all players have submitted points!\nMissing: {', '.join(missing)}",
                 ephemeral=True
             )
@@ -276,7 +283,8 @@ class AdminCommands(commands.Cog):
         else:
             embed.add_field(name="Winner", value=f"🎉 Team {winning_team} wins!", inline=False)
 
-        await interaction.response.send_message(embed=embed)
+        # Use followup instead of response
+        await interaction.followup.send(embed=embed)
 
         # Check queue for next match
         if matchmaking_cog:
@@ -295,6 +303,9 @@ class AdminCommands(commands.Cog):
             p4: discord.Member, p5: discord.Member, p6: discord.Member
     ):
         """Create a custom match with specific players"""
+        # Defer if this might take time
+        await interaction.response.defer()
+
         players_input = [p1, p2, p3, p4, p5, p6]
 
         # Get player data
@@ -302,7 +313,7 @@ class AdminCommands(commands.Cog):
         for member in players_input:
             player = await db.get_player(member.id)
             if not player:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"❌ {member.name} is not registered!",
                     ephemeral=True
                 )
@@ -338,7 +349,7 @@ class AdminCommands(commands.Cog):
         embed.add_field(name="🔵 Team 2", value=team2_names, inline=False)
         embed.set_footer(text="Use /startmatch to begin")
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="resetplayer", description="[ADMIN] Reset a player's stats")
     @app_commands.describe(member="The player to reset")
