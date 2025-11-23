@@ -2,19 +2,20 @@ from itertools import combinations
 import config
 
 
-def calculate_team_balance(players, team1_indices):
+def calculate_team_balance(players, team1_indices, team_size):
     """
     Calculate skill imbalance between two teams
 
     Args:
-        players: List of player dicts with 'skill_level'
+        players: List of player dicts with 'skill_levels'
         team1_indices: Tuple of indices for team 1
+        team_size: Number of players per team
 
     Returns:
         (team1_players, team2_players, imbalance)
     """
     team1 = [players[i] for i in team1_indices]
-    team2 = [players[i] for i, p in enumerate(players) if i not in team1_indices]
+    team2 = [players[i] for i, p in enumerate(players) if i not in team1_indices][:team_size]
 
     team1_skill = sum(p['skill_level'] for p in team1)
     team2_skill = sum(p['skill_level'] for p in team2)
@@ -24,31 +25,41 @@ def calculate_team_balance(players, team1_indices):
     return team1, team2, imbalance
 
 
-def find_balanced_teams(players, used_combinations=None):
+def find_balanced_teams(players, game_id, team_size, used_combinations=None):
     """
-    Find the most balanced team split
+    Find the most balanced team split for a specific game
 
     Args:
-        players: List of player dicts (must be 6+ players)
+        players: List of player dicts
+        game_id: Game identifier
+        team_size: Team size for this game
         used_combinations: Set of frozensets to avoid repeated team combinations
 
     Returns:
-        (team1, team2, imbalance) or None if no valid split found
+        (team1, team2, imbalance, combo_id) or None if no valid split found
     """
-    if len(players) < config.MATCH_SIZE:
+    match_size = team_size * 2
+
+    if len(players) < match_size:
         return None
 
     if used_combinations is None:
         used_combinations = set()
 
+    # Enrich players with their skill level for this game
+    enriched_players = []
+    for player in players:
+        player_copy = player.copy()
+        player_copy['skill_level'] = player['skill_levels'].get(game_id, 5)
+        enriched_players.append(player_copy)
+
     # Get all possible team combinations
-    team_size = config.TEAM_SIZE
-    all_combinations = list(combinations(range(len(players)), team_size))
+    all_combinations = list(combinations(range(len(enriched_players)), team_size))
 
     # Calculate imbalance for each combination
     results = []
     for team1_indices in all_combinations:
-        team1, team2, imbalance = calculate_team_balance(players, team1_indices)
+        team1, team2, imbalance = calculate_team_balance(enriched_players, team1_indices, team_size)
 
         # Create a unique identifier for this team combination
         team1_ids = frozenset(p['user_id'] for p in team1)
@@ -63,7 +74,7 @@ def find_balanced_teams(players, used_combinations=None):
 
     if not results:
         # If all combinations were used, clear the history and try again
-        return find_balanced_teams(players, set())
+        return find_balanced_teams(players, game_id, team_size, set())
 
     # Sort by imbalance (best balance first)
     results.sort(key=lambda x: x[2])
@@ -76,27 +87,31 @@ def find_balanced_teams(players, used_combinations=None):
     return None
 
 
-def create_match_from_queue(online_players, used_combinations=None):
+def create_match_from_queue(online_players, game_id, used_combinations=None):
     """
-    Create a match from the queue of online players
+    Create a match from the queue of online players for a specific game
 
     Args:
         online_players: List of online players sorted by priority
+        game_id: Game identifier
         used_combinations: Set of recently used team combinations
 
     Returns:
         dict with match info or None
     """
-    if len(online_players) < config.MATCH_SIZE:
+    game_info = config.GAMES[game_id]
+    team_size = game_info['team_size']
+    match_size = team_size * 2
+
+    if len(online_players) < match_size:
         return None
 
-    # Try with minimum players first (6)
-    for queue_size in range(config.MATCH_SIZE,
-                            min(len(online_players) + 1,
-                                config.MATCH_SIZE + config.MAX_QUEUE_EXPANSION + 1)):
+    # Try with minimum players first
+    max_queue_size = min(len(online_players), match_size + config.MAX_QUEUE_EXPANSION)
 
+    for queue_size in range(match_size, max_queue_size + 1):
         candidate_players = online_players[:queue_size]
-        result = find_balanced_teams(candidate_players, used_combinations)
+        result = find_balanced_teams(candidate_players, game_id, team_size, used_combinations)
 
         if result:
             team1, team2, imbalance, combo_id = result

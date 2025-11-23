@@ -4,80 +4,89 @@ import config
 from datetime import datetime
 
 
-class ChannelManager:
-    """Manages auto-updating information channels"""
+class MultiGameChannelManager:
+    """Manages auto-updating information channels for multiple games"""
 
     def __init__(self, bot):
         self.bot = bot
-        self.channel_ids = {}  # Store channel IDs
+        self.game_channels = {}  # {game_id: {channel_type: channel_id}}
 
-    async def setup_channels(self, guild):
-        """Create or find all info channels"""
-        # Find or create category
-        category = discord.utils.get(guild.categories, name=config.INFO_CATEGORY_NAME)
+    async def setup_all_game_channels(self, guild):
+        """Set up channels for all games"""
+        for game_id, game_info in config.GAMES.items():
+            await self.setup_game_channels(guild, game_id)
+        print("✅ All game channels set up")
+
+    async def setup_game_channels(self, guild, game_id: str):
+        """Set up channels for a specific game"""
+        game_info = config.GAMES[game_id]
+
+        # Find or create game category
+        category = discord.utils.get(guild.categories, name=game_info['category_name'])
         if not category:
-            category = await guild.create_category(config.INFO_CATEGORY_NAME)
+            category = await guild.create_category(game_info['category_name'])
 
-        # Create/find each channel
-        self.channel_ids['queue'] = await self._get_or_create_channel(
-            guild, category, config.QUEUE_CHANNEL_NAME
-        )
-        self.channel_ids['leaderboard'] = await self._get_or_create_channel(
-            guild, category, config.LEADERBOARD_CHANNEL_NAME
-        )
-        self.channel_ids['history'] = await self._get_or_create_channel(
-            guild, category, config.MATCH_HISTORY_CHANNEL_NAME
-        )
-        self.channel_ids['upcoming'] = await self._get_or_create_channel(
-            guild, category, config.UPCOMING_MATCHES_CHANNEL_NAME
-        )
+        # Initialize storage for this game
+        if game_id not in self.game_channels:
+            self.game_channels[game_id] = {}
 
-        # Set channel permissions (read-only for @everyone, bot can send)
-        for channel_id in self.channel_ids.values():
-            channel = guild.get_channel(channel_id)
-            if channel:
-                # Allow bot to send messages
+        # Create all channels for this game
+        channels_to_create = [
+            ('general', f"💬│{config.GENERAL_CHANNEL_NAME}"),
+            ('queue', f"🎮│{config.QUEUE_CHANNEL_NAME}"),
+            ('upcoming', f"⏳│{config.UPCOMING_MATCHES_CHANNEL_NAME}"),
+            ('history', f"📜│{config.MATCH_HISTORY_CHANNEL_NAME}"),
+            ('leaderboard', f"🏆│{config.LEADERBOARD_CHANNEL_NAME}")
+        ]
+
+        for channel_type, channel_name in channels_to_create:
+            channel = discord.utils.get(guild.text_channels, name=channel_name, category=category)
+            if not channel:
+                channel = await guild.create_text_channel(channel_name, category=category)
+
+            self.game_channels[game_id][channel_type] = channel.id
+
+            # Set permissions
+            if channel_type != 'general':  # General is for chatting
                 await channel.set_permissions(
-                    guild.me,  # The bot itself
+                    guild.me,
                     send_messages=True,
                     embed_links=True,
                     read_messages=True,
                     read_message_history=True,
-                    manage_messages=True  # For purging old messages
+                    manage_messages=True
                 )
-                # Prevent everyone else from sending
                 await channel.set_permissions(
                     guild.default_role,
                     send_messages=False,
                     add_reactions=False
                 )
 
-        # Initial updates
-        await self.update_queue(guild)
-        await self.update_leaderboard(guild)
-        await self.update_match_history(guild)
-        await self.update_upcoming_matches(guild)
+        # Initial updates for info channels
+        await self.update_queue(guild, game_id)
+        await self.update_leaderboard(guild, game_id)
+        await self.update_match_history(guild, game_id)
+        await self.update_upcoming_matches(guild, game_id)
 
-        print("✅ Info channels set up")
+    def get_channel(self, guild, game_id: str, channel_type: str):
+        """Get a specific channel for a game"""
+        if game_id not in self.game_channels:
+            return None
+        channel_id = self.game_channels[game_id].get(channel_type)
+        return guild.get_channel(channel_id) if channel_id else None
 
-    async def _get_or_create_channel(self, guild, category, name):
-        """Get existing channel or create new one"""
-        channel = discord.utils.get(guild.text_channels, name=name)
-        if not channel:
-            channel = await guild.create_text_channel(name, category=category)
-        return channel.id
-
-    async def update_queue(self, guild):
-        """Update queue channel"""
-        channel = guild.get_channel(self.channel_ids.get('queue'))
+    async def update_queue(self, guild, game_id: str):
+        """Update queue channel for specific game"""
+        channel = self.get_channel(guild, game_id, 'queue')
         if not channel:
             return
 
-        online_players = await db.get_online_players()
+        game_info = config.GAMES[game_id]
+        online_players = await db.get_online_players(game_id)
 
         embed = discord.Embed(
-            title="🎮 Matchmaking Queue",
-            description=f"Players waiting for match: **{len(online_players)}**",
+            title=f"{game_info['emoji']} {game_info['short_name']} - Queue",
+            description=f"Players waiting: **{len(online_players)}**",
             color=discord.Color.green(),
             timestamp=datetime.utcnow()
         )
@@ -85,27 +94,30 @@ class ChannelManager:
         if online_players:
             queue_text = ""
             for i, player in enumerate(online_players, 1):
-                priority_star = "⭐" if player.get('queue_priority', 0) > 0 else ""
-                queue_text += f"{i}. {priority_star}**{player['username']}** (Skill: {player['skill_level']}/10)\n"
+                stats = await db.get_game_stats(player['user_id'], game_id)
+                priority_star = "⭐" if stats.get('queue_priority', 0) > 0 else ""
+                skill = player['skill_levels'].get(game_id, 5)
+                queue_text += f"{i}. {priority_star}**{player['username']}** (Skill: {skill}/10)\n"
             embed.add_field(name="Players in Queue", value=queue_text, inline=False)
-            embed.set_footer(text="⭐ = Priority (skipped in previous match) • Updated")
+            embed.set_footer(text="⭐ = Priority • Updated")
         else:
             embed.add_field(name="Queue Status", value="*Queue is empty*", inline=False)
+            embed.set_footer(text="Updated")
 
-        # Clear channel and send new message
         await channel.purge(limit=100)
         await channel.send(embed=embed)
 
-    async def update_leaderboard(self, guild):
-        """Update leaderboard channel"""
-        channel = guild.get_channel(self.channel_ids.get('leaderboard'))
+    async def update_leaderboard(self, guild, game_id: str):
+        """Update leaderboard channel for specific game"""
+        channel = self.get_channel(guild, game_id, 'leaderboard')
         if not channel:
             return
 
-        players = await db.get_leaderboard(15)
+        game_info = config.GAMES[game_id]
+        players = await db.get_leaderboard(game_id, 15)
 
         embed = discord.Embed(
-            title="🏆 Player Leaderboard",
+            title=f"{game_info['emoji']} {game_info['short_name']} - Leaderboard",
             description="Top players by points",
             color=discord.Color.gold(),
             timestamp=datetime.utcnow()
@@ -113,22 +125,18 @@ class ChannelManager:
 
         if players:
             leaderboard_text = ""
-            for i, player in enumerate(players, 1):
-                if i == 1:
-                    medal = "🥇"
-                elif i == 2:
-                    medal = "🥈"
-                elif i == 3:
-                    medal = "🥉"
-                else:
-                    medal = f"`{i:2d}.`"
+            for i, player_stats in enumerate(players, 1):
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"`{i:2d}.`"
 
-                win_rate = (player['wins'] / player['matches_played'] * 100) if player['matches_played'] > 0 else 0
+                matches = player_stats['matches_played']
+                wins = player_stats['wins']
+                win_rate = (wins / matches * 100) if matches > 0 else 0
+
                 leaderboard_text += (
-                    f"{medal} **{player['username']}**\n"
-                    f"     └ Points: {player['points']} | "
-                    f"Matches: {player['matches_played']} | "
-                    f"Wins: {player['wins']} ({win_rate:.0f}%)\n\n"
+                    f"{medal} **{player_stats['username']}**\n"
+                    f"     └ Points: {player_stats['points']} | "
+                    f"Matches: {matches} | "
+                    f"Wins: {wins} ({win_rate:.0f}%)\n\n"
                 )
 
             embed.description = leaderboard_text
@@ -137,20 +145,20 @@ class ChannelManager:
 
         embed.set_footer(text="Updated")
 
-        # Clear channel and send new message
         await channel.purge(limit=100)
         await channel.send(embed=embed)
 
-    async def update_match_history(self, guild):
-        """Update match history channel"""
-        channel = guild.get_channel(self.channel_ids.get('history'))
+    async def update_match_history(self, guild, game_id: str):
+        """Update match history channel for specific game"""
+        channel = self.get_channel(guild, game_id, 'history')
         if not channel:
             return
 
-        matches = await db.get_match_history(10)
+        game_info = config.GAMES[game_id]
+        matches = await db.get_match_history(game_id, 10)
 
         embed = discord.Embed(
-            title="📜 Match History",
+            title=f"{game_info['emoji']} {game_info['short_name']} - Match History",
             description="Recent completed matches",
             color=discord.Color.blue(),
             timestamp=datetime.utcnow()
@@ -191,21 +199,21 @@ class ChannelManager:
 
         embed.set_footer(text="Updated")
 
-        # Clear channel and send new message
         await channel.purge(limit=100)
         await channel.send(embed=embed)
 
-    async def update_upcoming_matches(self, guild):
-        """Update upcoming matches channel"""
-        channel = guild.get_channel(self.channel_ids.get('upcoming'))
+    async def update_upcoming_matches(self, guild, game_id: str):
+        """Update upcoming matches channel for specific game"""
+        channel = self.get_channel(guild, game_id, 'upcoming')
         if not channel:
             return
 
-        active_match = await db.get_active_match()
-        pending_match = await db.get_pending_match()
+        game_info = config.GAMES[game_id]
+        active_match = await db.get_active_match(game_id)
+        pending_match = await db.get_pending_match(game_id)
 
         embed = discord.Embed(
-            title="⏳ Upcoming Matches",
+            title=f"{game_info['emoji']} {game_info['short_name']} - Upcoming Matches",
             color=discord.Color.orange(),
             timestamp=datetime.utcnow()
         )
@@ -238,7 +246,6 @@ class ChannelManager:
 
         embed.set_footer(text="Updated")
 
-        # Clear channel and send new message
         await channel.purge(limit=100)
         await channel.send(embed=embed)
 
@@ -251,5 +258,5 @@ def get_channel_manager(bot):
     """Get or create channel manager instance"""
     global channel_manager
     if channel_manager is None:
-        channel_manager = ChannelManager(bot)
+        channel_manager = MultiGameChannelManager(bot)
     return channel_manager

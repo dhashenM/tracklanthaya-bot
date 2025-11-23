@@ -2,8 +2,52 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from utils.database import db
-import config
 from utils.channel_manager import get_channel_manager
+import config
+
+
+class GameSelect(discord.ui.Select):
+    """Dropdown for selecting a game"""
+
+    def __init__(self, action: str, enabled_games: list):
+        # Create options for each enabled game
+        options = []
+        for game_id in enabled_games:
+            game_info = config.GAMES[game_id]
+            options.append(
+                discord.SelectOption(
+                    label=game_info['name'],
+                    value=game_id,
+                    emoji=game_info['emoji'],
+                    description=f"Team Size: {game_info['team_size']}v{game_info['team_size']}"
+                )
+            )
+
+        super().__init__(
+            placeholder=f"Select a game to {action}...",
+            options=options,
+            min_values=1,
+            max_values=len(options)  # Allow multiple selections
+        )
+        self.action = action
+
+    async def callback(self, interaction: discord.Interaction):
+        # Handle in parent view
+        await self.view.handle_selection(interaction, self.values)
+
+
+class GameSelectView(discord.ui.View):
+    """View with game selection dropdown"""
+
+    def __init__(self, action: str, enabled_games: list, callback_func):
+        super().__init__(timeout=60)
+        self.action = action
+        self.callback_func = callback_func
+        self.add_item(GameSelect(action, enabled_games))
+
+    async def handle_selection(self, interaction: discord.Interaction, selected_games: list):
+        await self.callback_func(interaction, selected_games)
+        self.stop()
 
 
 class PlayerCommands(commands.Cog):
@@ -26,22 +70,13 @@ class PlayerCommands(commands.Cog):
 
         await db.create_player(interaction.user.id, interaction.user.name)
         await interaction.response.send_message(
-            "✅ Registration successful! Use `/setskill` to set your skill level (1-10).",
+            "✅ Registration successful! Use `/setskill` to set your skill levels for each game.",
             ephemeral=True
         )
 
-    @app_commands.command(name="setskill", description="Set your skill level (1-10)")
-    @app_commands.describe(level="Your skill level from 1 (beginner) to 10 (expert)")
-    async def setskill(self, interaction: discord.Interaction, level: int):
-        """Set player skill level"""
-        # Validate skill level
-        if level < 1 or level > 10:
-            await interaction.response.send_message(
-                "❌ Skill level must be between 1 and 10!",
-                ephemeral=True
-            )
-            return
-
+    @app_commands.command(name="setskill", description="Set your skill level for games (1-10)")
+    async def setskill(self, interaction: discord.Interaction):
+        """Set player skill level - shows dropdown to select games"""
         player = await db.get_player(interaction.user.id)
 
         if not player:
@@ -51,15 +86,32 @@ class PlayerCommands(commands.Cog):
             )
             return
 
-        await db.update_player(interaction.user.id, {'skill_level': level})
+        enabled_games = await db.get_enabled_games()
+
+        if not enabled_games:
+            await interaction.response.send_message(
+                "❌ No games are currently enabled!",
+                ephemeral=True
+            )
+            return
+
+        # Show game selection
+        view = GameSelectView("set skill for", enabled_games, self.handle_setskill_selection)
         await interaction.response.send_message(
-            f"✅ Skill level set to {level}/10",
+            "🎮 Select which game(s) you want to set your skill level for:",
+            view=view,
             ephemeral=True
         )
 
-    @app_commands.command(name="online", description="Set yourself as online for matchmaking")
+    async def handle_setskill_selection(self, interaction: discord.Interaction, selected_games: list):
+        """Handle skill level setting after game selection"""
+        # Create modal for skill input
+        modal = SkillModal(selected_games)
+        await interaction.response.send_modal(modal)
+
+    @app_commands.command(name="online", description="Join matchmaking queue")
     async def go_online(self, interaction: discord.Interaction):
-        """Set player status to online"""
+        """Set player status to online for selected games"""
         player = await db.get_player(interaction.user.id)
 
         if not player:
@@ -69,49 +121,72 @@ class PlayerCommands(commands.Cog):
             )
             return
 
-        matchmaking_enabled = await db.get_system_setting('matchmaking_enabled')
-        if not matchmaking_enabled:
+        enabled_games = await db.get_enabled_games()
+
+        if not enabled_games:
             await interaction.response.send_message(
-                "❌ Matchmaking is currently disabled by admins.",
+                "❌ No games are currently enabled!",
                 ephemeral=True
             )
             return
 
-        if player['status'] == 'online':
+        # Check if player is in an active match
+        if player.get('current_match_game'):
+            game_info = config.GAMES[player['current_match_game']]
             await interaction.response.send_message(
-                "⚠️ You're already online!",
+                f"❌ You're currently in an active {game_info['name']} match!",
                 ephemeral=True
             )
             return
 
-        active_match = await db.get_active_match()
-        if active_match:
-            all_player_ids = [p['user_id'] for p in active_match['team1'] + active_match['team2']]
-            if interaction.user.id in all_player_ids:
-                await interaction.response.send_message(
-                    "❌ You're currently in an active match!",
-                    ephemeral=True
-                )
-                return
+        # Filter out games they're already online for
+        available_games = [g for g in enabled_games if player.get('queue_status', {}).get(g) != 'online']
 
-        await db.update_player(interaction.user.id, {'status': 'online'})
+        if not available_games:
+            await interaction.response.send_message(
+                "⚠️ You're already online for all enabled games!",
+                ephemeral=True
+            )
+            return
+
+        # Show game selection
+        view = GameSelectView("join queue for", available_games, self.handle_online_selection)
         await interaction.response.send_message(
-            "✅ You are now online and in the matchmaking queue!",
+            "🎮 Select which game(s) you want to queue for:",
+            view=view,
             ephemeral=True
         )
 
-        # Update queue channel
-        cm = get_channel_manager(self.bot)
-        await cm.update_queue(interaction.guild)
+    async def handle_online_selection(self, interaction: discord.Interaction, selected_games: list):
+        """Handle going online after game selection"""
+        player = await db.get_player(interaction.user.id)
+        queue_status = player.get('queue_status', {})
 
-        # Trigger matchmaking check
+        # Update queue status for selected games
+        for game_id in selected_games:
+            queue_status[game_id] = 'online'
+
+        await db.update_player(interaction.user.id, {'queue_status': queue_status})
+
+        # Build response message
+        game_names = [config.GAMES[g]['name'] for g in selected_games]
+        await interaction.response.send_message(
+            f"✅ You are now online for:\n" + "\n".join([f"• {name}" for name in game_names]),
+            ephemeral=True
+        )
+
+        # Update queue channels and check matchmaking for each game
+        cm = get_channel_manager(self.bot)
         matchmaking_cog = self.bot.get_cog('MatchmakingCommands')
-        if matchmaking_cog:
-            await matchmaking_cog.check_and_create_match(interaction.guild)
 
-    @app_commands.command(name="offline", description="Set yourself as offline (leave queue)")
+        for game_id in selected_games:
+            await cm.update_queue(interaction.guild, game_id)
+            if matchmaking_cog:
+                await matchmaking_cog.check_and_create_match(interaction.guild, game_id)
+
+    @app_commands.command(name="offline", description="Leave matchmaking queue")
     async def go_offline(self, interaction: discord.Interaction):
-        """Set player status to offline"""
+        """Set player status to offline for selected games"""
         player = await db.get_player(interaction.user.id)
 
         if not player:
@@ -121,24 +196,49 @@ class PlayerCommands(commands.Cog):
             )
             return
 
-        if player['status'] == 'offline':
+        # Get games they're currently online for
+        queue_status = player.get('queue_status', {})
+        online_games = [g for g, status in queue_status.items() if status == 'online']
+
+        if not online_games:
             await interaction.response.send_message(
-                "⚠️ You're already offline!",
+                "⚠️ You're not online for any games!",
                 ephemeral=True
             )
             return
 
-        await db.update_player(interaction.user.id, {'status': 'offline'})
+        # Show game selection
+        view = GameSelectView("leave queue for", online_games, self.handle_offline_selection)
         await interaction.response.send_message(
-            "✅ You are now offline and removed from the queue.",
+            "🎮 Select which game(s) you want to leave the queue for:",
+            view=view,
             ephemeral=True
         )
 
-        # Update queue channel
-        cm = get_channel_manager(self.bot)
-        await cm.update_queue(interaction.guild)
+    async def handle_offline_selection(self, interaction: discord.Interaction, selected_games: list):
+        """Handle going offline after game selection"""
+        player = await db.get_player(interaction.user.id)
+        queue_status = player.get('queue_status', {})
 
-    @app_commands.command(name="profile", description="View your profile")
+        # Update queue status for selected games
+        for game_id in selected_games:
+            queue_status[game_id] = 'offline'
+
+        await db.update_player(interaction.user.id, {'queue_status': queue_status})
+
+        # Build response message
+        game_names = [config.GAMES[g]['name'] for g in selected_games]
+        await interaction.response.send_message(
+            f"✅ You are now offline for:\n" + "\n".join([f"• {name}" for name in game_names]),
+            ephemeral=True
+        )
+
+        # Update queue channels
+        cm = get_channel_manager(self.bot)
+        for game_id in selected_games:
+            await cm.update_queue(interaction.guild, game_id)
+
+    @app_commands.command(name="profile", description="View your profile and stats")
     async def profile(self, interaction: discord.Interaction, member: discord.Member = None):
         """View player profile"""
         target_user = member if member else interaction.user
@@ -155,104 +255,49 @@ class PlayerCommands(commands.Cog):
             title=f"👤 {player['username']}'s Profile",
             color=discord.Color.blue()
         )
-        embed.add_field(name="Skill Level", value=f"{player['skill_level']}/10", inline=True)
-        embed.add_field(name="Status", value=player['status'].title(), inline=True)
-        embed.add_field(name="Points", value=player['points'], inline=True)
-        embed.add_field(name="Matches Played", value=player['matches_played'], inline=True)
-        embed.add_field(name="Wins", value=player['wins'], inline=True)
-        embed.add_field(name="Losses", value=player['losses'], inline=True)
+
+        # Show current match status
+        if player.get('current_match_game'):
+            game_info = config.GAMES[player['current_match_game']]
+            embed.add_field(
+                name="🎮 Current Match",
+                value=f"{game_info['emoji']} {game_info['name']}",
+                inline=False
+            )
+
+        # Show queue status
+        queue_status = player.get('queue_status', {})
+        online_games = [config.GAMES[g]['name'] for g, s in queue_status.items() if s == 'online']
+        if online_games:
+            embed.add_field(
+                name="📋 Queued For",
+                value="\n".join([f"• {name}" for name in online_games]),
+                inline=False
+            )
+
+        # Show stats for each game
+        enabled_games = await db.get_enabled_games()
+        for game_id in enabled_games:
+            game_info = config.GAMES[game_id]
+            stats = await db.get_game_stats(target_user.id, game_id)
+            skill = player['skill_levels'].get(game_id, 5)
+
+            win_rate = (stats['wins'] / stats['matches_played'] * 100) if stats['matches_played'] > 0 else 0
+
+            stats_text = (
+                f"Skill: {skill}/10\n"
+                f"Points: {stats['points']}\n"
+                f"Matches: {stats['matches_played']} | Wins: {stats['wins']} ({win_rate:.0f}%)"
+            )
+
+            embed.add_field(
+                name=f"{game_info['emoji']} {game_info['short_name']}",
+                value=stats_text,
+                inline=True
+            )
 
         # Always send as ephemeral (private)
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    '''
-    @app_commands.command(name="leaderboard", description="View the top players")
-    async def leaderboard(self, interaction: discord.Interaction):
-        """Display leaderboard"""
-        players = await db.get_leaderboard(10)
-
-        if not players:
-            await interaction.response.send_message("❌ No players registered yet!")
-            return
-
-        embed = discord.Embed(
-            title="🏆 Leaderboard - Top 10 Players",
-            color=discord.Color.gold()
-        )
-
-        description = ""
-        for i, player in enumerate(players, 1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-            description += f"{medal} **{player['username']}** - {player['points']} pts (Skill: {player['skill_level']}/10)\n"
-
-        embed.description = description
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(name="queue", description="View current matchmaking queue")
-    async def view_queue(self, interaction: discord.Interaction):
-        """View players in queue"""
-        online_players = await db.get_online_players()
-
-        if not online_players:
-            await interaction.response.send_message("📭 Queue is empty!")
-            return
-
-        embed = discord.Embed(
-            title=f"📋 Matchmaking Queue ({len(online_players)} players)",
-            color=discord.Color.green()
-        )
-
-        description = ""
-        for i, player in enumerate(online_players, 1):
-            priority_star = "⭐" if player.get('queue_priority', 0) > 0 else ""
-            description += f"{i}. {priority_star}**{player['username']}** (Skill: {player['skill_level']}/10)\n"
-
-        embed.description = description
-        embed.set_footer(text="⭐ = Priority (skipped in previous match)")
-
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(name="matches", description="View match information")
-    async def matches(self, interaction: discord.Interaction):
-        """View active, pending, and recent matches"""
-        active_match = await db.get_active_match()
-        pending_match = await db.get_pending_match()
-        match_history = await db.get_match_history(5)
-
-        embed = discord.Embed(
-            title="🎮 Match Information",
-            color=discord.Color.purple()
-        )
-
-        # Active match
-        if active_match:
-            team1_names = ", ".join([p['username'] for p in active_match['team1']])
-            team2_names = ", ".join([p['username'] for p in active_match['team2']])
-            active_text = f"🔴 **Team 1:** {team1_names}\n🔵 **Team 2:** {team2_names}"
-            embed.add_field(name="⚡ Active Match", value=active_text, inline=False)
-        else:
-            embed.add_field(name="⚡ Active Match", value="None", inline=False)
-
-        # Pending match
-        if pending_match:
-            team1_names = ", ".join([p['username'] for p in pending_match['team1']])
-            team2_names = ", ".join([p['username'] for p in pending_match['team2']])
-            pending_text = f"🔴 **Team 1:** {team1_names}\n🔵 **Team 2:** {team2_names}"
-            embed.add_field(name="⏳ Upcoming Match", value=pending_text, inline=False)
-        else:
-            embed.add_field(name="⏳ Upcoming Match", value="None", inline=False)
-
-        # Match history
-        if match_history:
-            history_text = ""
-            for match in match_history[:3]:
-                winner = match.get('winning_team', 'N/A')
-                team1_score = match.get('team1_score', 0)
-                team2_score = match.get('team2_score', 0)
-                history_text += f"• Team 1: {team1_score} - Team 2: {team2_score} (Winner: Team {winner})\n"
-            embed.add_field(name="📜 Recent Matches", value=history_text or "None", inline=False)
-
-        await interaction.response.send_message(embed=embed)
-    '''
 
     @app_commands.command(name="submitpoints", description="Submit your points after a match")
     @app_commands.describe(points="Points you earned in the match")
@@ -265,23 +310,18 @@ class PlayerCommands(commands.Cog):
             )
             return
 
-        # Find match awaiting points
-        match = await db.db.matches.find_one({'status': 'awaiting_points'})
+        # Find any match awaiting points that this player is in
+        match = await db.db.matches.find_one({
+            'status': 'awaiting_points',
+            '$or': [
+                {'team1.user_id': interaction.user.id},
+                {'team2.user_id': interaction.user.id}
+            ]
+        })
 
         if not match:
             await interaction.response.send_message(
-                "❌ No match is currently accepting point submissions!",
-                ephemeral=True
-            )
-            return
-
-        # Check if player was in this match
-        all_players = match['team1'] + match['team2']
-        player_in_match = any(p['user_id'] == interaction.user.id for p in all_players)
-
-        if not player_in_match:
-            await interaction.response.send_message(
-                "❌ You were not in this match!",
+                "❌ You don't have any matches waiting for point submission!",
                 ephemeral=True
             )
             return
@@ -299,11 +339,14 @@ class PlayerCommands(commands.Cog):
         points_submitted[str(interaction.user.id)] = points
         await db.update_match(match['_id'], {'points_submitted': points_submitted})
 
+        all_players = match['team1'] + match['team2']
         submitted_count = len(points_submitted)
         total_count = len(all_players)
 
+        game_info = config.GAMES[match['game_id']]
+
         await interaction.response.send_message(
-            f"✅ Points submitted: {points}\n"
+            f"✅ Points submitted for {game_info['name']}: {points}\n"
             f"({submitted_count}/{total_count} players have submitted)",
             ephemeral=True
         )
@@ -314,9 +357,120 @@ class PlayerCommands(commands.Cog):
             admin_role = discord.utils.get(interaction.guild.roles, name=config.ADMIN_ROLE_NAME)
             if admin_role and channel:
                 await channel.send(
-                    f"{admin_role.mention} All players have submitted their points! "
+                    f"{admin_role.mention} All players have submitted their points for **{game_info['name']}**! "
                     f"Use `/verifypoints` to finalize the match."
                 )
+
+    @app_commands.command(name="mystats", description="Quick view of your current queue status")
+    async def mystats(self, interaction: discord.Interaction):
+        """Show quick status of queues and current match"""
+        player = await db.get_player(interaction.user.id)
+
+        if not player:
+            await interaction.response.send_message(
+                "❌ You need to register first! Use `/register`",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title="📊 Your Quick Stats",
+            color=discord.Color.blue()
+        )
+
+        # Current match
+        if player.get('current_match_game'):
+            game_info = config.GAMES[player['current_match_game']]
+            embed.add_field(
+                name="🎮 Currently Playing",
+                value=f"{game_info['emoji']} {game_info['name']}",
+                inline=False
+            )
+        else:
+            embed.add_field(name="🎮 Currently Playing", value="Not in a match", inline=False)
+
+        # Queue status
+        queue_status = player.get('queue_status', {})
+        online_games = []
+        offline_games = []
+
+        enabled_games = await db.get_enabled_games()
+        for game_id in enabled_games:
+            game_info = config.GAMES[game_id]
+            if queue_status.get(game_id) == 'online':
+                online_games.append(f"{game_info['emoji']} {game_info['short_name']}")
+            else:
+                offline_games.append(f"{game_info['emoji']} {game_info['short_name']}")
+
+        if online_games:
+            embed.add_field(
+                name="🟢 Online For",
+                value="\n".join(online_games),
+                inline=True
+            )
+
+        if offline_games:
+            embed.add_field(
+                name="⚪ Offline For",
+                value="\n".join(offline_games),
+                inline=True
+            )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class SkillModal(discord.ui.Modal):
+    """Modal for entering skill levels"""
+
+    def __init__(self, game_ids: list):
+        super().__init__(title="Set Your Skill Levels")
+        self.game_ids = game_ids
+
+        # Add input for each game (max 5 per modal)
+        for game_id in game_ids[:5]:  # Discord modal limit
+            game_info = config.GAMES[game_id]
+            self.add_item(
+                discord.ui.TextInput(
+                    label=f"{game_info['short_name']} Skill (1-10)",
+                    placeholder="Enter your skill level from 1-10",
+                    min_length=1,
+                    max_length=2,
+                    custom_id=game_id
+                )
+            )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        player = await db.get_player(interaction.user.id)
+        skill_levels = player.get('skill_levels', {})
+
+        updates = []
+        for item in self.children:
+            try:
+                skill = int(item.value)
+                if 1 <= skill <= 10:
+                    skill_levels[item.custom_id] = skill
+                    game_info = config.GAMES[item.custom_id]
+                    updates.append(f"{game_info['emoji']} {game_info['short_name']}: {skill}/10")
+                else:
+                    await interaction.response.send_message(
+                        f"❌ Skill level must be between 1 and 10!",
+                        ephemeral=True
+                    )
+                    return
+            except ValueError:
+                await interaction.response.send_message(
+                    f"❌ Please enter valid numbers!",
+                    ephemeral=True
+                )
+                return
+
+        await db.update_player(interaction.user.id, {'skill_levels': skill_levels})
+
+        await interaction.response.send_message(
+            "✅ Skill levels updated:\n" + "\n".join(updates),
+            ephemeral=True
+        )
+
 
 async def setup(bot):
     """Load the cog"""
