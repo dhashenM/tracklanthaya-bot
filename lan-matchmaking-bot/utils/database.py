@@ -26,10 +26,10 @@ class Database:
         player = {
             'user_id': user_id,
             'username': username,
-            'skill_levels': {game_id: 5 for game_id in config.GAMES.keys()},  # Separate skill for each game
-            'queue_status': {},  # {game_id: 'online'/'offline'}
+            'skill_levels': {},  # Empty dict - user must set skills before queueing
+            'queue_status': {},
             'created_at': datetime.utcnow(),
-            'current_match_game': None  # Which game they're currently playing (if any)
+            'current_match_game': None
         }
         await self.db.players.update_one(
             {'user_id': user_id},

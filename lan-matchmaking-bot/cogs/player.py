@@ -159,7 +159,29 @@ class PlayerCommands(commands.Cog):
 
     async def handle_online_selection(self, interaction: discord.Interaction, selected_games: list):
         """Handle going online after game selection"""
+        await interaction.response.defer(ephemeral=True)
+
         player = await db.get_player(interaction.user.id)
+        skill_levels = player.get('skill_levels', {})
+
+        # Check if user needs to set skill for any selected games
+        games_need_skill = []
+        for game_id in selected_games:
+            # If skill is still default (5) or not set, require them to set it
+            if game_id not in skill_levels or skill_levels.get(game_id) == 5:
+                games_need_skill.append(game_id)
+
+        if games_need_skill:
+            # User needs to set skill first
+            game_names = [config.GAMES[g]['name'] for g in games_need_skill]
+            await interaction.followup.send(
+                f"⚠️ Please set your skill level first for:\n" +
+                "\n".join([f"• {name}" for name in game_names]) +
+                "\n\nUse `/setskill` to set your skill levels (1-10).",
+                ephemeral=True
+            )
+            return
+
         queue_status = player.get('queue_status', {})
 
         # Update queue status for selected games
@@ -170,7 +192,7 @@ class PlayerCommands(commands.Cog):
 
         # Build response message
         game_names = [config.GAMES[g]['name'] for g in selected_games]
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ You are now online for:\n" + "\n".join([f"• {name}" for name in game_names]),
             ephemeral=True
         )
@@ -238,7 +260,7 @@ class PlayerCommands(commands.Cog):
         for game_id in selected_games:
             await cm.update_queue(interaction.guild, game_id)
 
-    @app_commands.command(name="profile", description="View your profile and stats")
+    @app_commands.command(name="profile", description="View player profile and stats")
     async def profile(self, interaction: discord.Interaction, member: discord.Member = None):
         """View player profile"""
         target_user = member if member else interaction.user
@@ -265,39 +287,45 @@ class PlayerCommands(commands.Cog):
                 inline=False
             )
 
-        # Show queue status
+        # Show queue status for enabled games only
+        enabled_games = await db.get_enabled_games()
         queue_status = player.get('queue_status', {})
-        online_games = [config.GAMES[g]['name'] for g, s in queue_status.items() if s == 'online']
+        online_games = [config.GAMES[g]['name'] for g in enabled_games if queue_status.get(g) == 'online']
         if online_games:
             embed.add_field(
-                name="📋 Queued For",
+                name="📋 Currently Queued For",
                 value="\n".join([f"• {name}" for name in online_games]),
                 inline=False
             )
 
-        # Show stats for each game
-        enabled_games = await db.get_enabled_games()
-        for game_id in enabled_games:
-            game_info = config.GAMES[game_id]
+        # Show stats for ALL games (not just enabled ones)
+        embed.add_field(name="📊 Game Statistics", value="", inline=False)
+
+        for game_id, game_info in config.GAMES.items():
             stats = await db.get_game_stats(target_user.id, game_id)
-            skill = player['skill_levels'].get(game_id, 5)
+            skill_levels = player.get('skill_levels', {})
+            skill = skill_levels.get(game_id, "Not Set")
 
-            win_rate = (stats['wins'] / stats['matches_played'] * 100) if stats['matches_played'] > 0 else 0
+            # Only show if player has played at least one match OR has set skill
+            if stats['matches_played'] > 0 or skill != "Not Set":
+                win_rate = (stats['wins'] / stats['matches_played'] * 100) if stats['matches_played'] > 0 else 0
 
-            stats_text = (
-                f"Skill: {skill}/10\n"
-                f"Points: {stats['points']}\n"
-                f"Matches: {stats['matches_played']} | Wins: {stats['wins']} ({win_rate:.0f}%)"
-            )
+                skill_text = f"{skill}/10" if skill != "Not Set" else "❌ Not Set"
 
-            embed.add_field(
-                name=f"{game_info['emoji']} {game_info['short_name']}",
-                value=stats_text,
-                inline=True
-            )
+                stats_text = (
+                    f"Skill: {skill_text} | Points: {stats['points']}\n"
+                    f"Matches: {stats['matches_played']} | Wins: {stats['wins']} ({win_rate:.0f}%)"
+                )
 
-        # Always send as ephemeral (private)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+                embed.add_field(
+                    name=f"{game_info['emoji']} {game_info['short_name']}",
+                    value=stats_text,
+                    inline=True
+                )
+
+        # Show as ephemeral if viewing own profile, public if viewing others
+        is_self = (member is None or member.id == interaction.user.id)
+        await interaction.response.send_message(embed=embed, ephemeral=is_self)
 
     @app_commands.command(name="submitpoints", description="Submit your points after a match")
     @app_commands.describe(points="Points you earned in the match")
