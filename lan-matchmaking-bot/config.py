@@ -9,56 +9,73 @@ MONGODB_URI = os.getenv('MONGODB_URI')
 GUILD_ID = int(os.getenv('GUILD_ID'))
 ADMIN_ROLE_NAME = os.getenv('ADMIN_ROLE_NAME', 'Admin')
 
-# Matchmaking Configuration
-TEAM_SIZE = 3  # 3v3 matches
-MATCH_SIZE = TEAM_SIZE * 2  # 6 players total
-SKILL_IMBALANCE_THRESHOLD = 3  # Maximum allowed skill difference between teams
-MAX_QUEUE_EXPANSION = 4  # Expand queue up to 10 players (6+4)
-POINTS_ENTRY_TIMEOUT = 600  # 10 minutes in seconds
+# Google Sheets Configuration
+GOOGLE_SHEETS_ENABLED = os.getenv('GOOGLE_SHEETS_ENABLED', 'True').lower() == 'true'
+ROCKET_LEAGUE_SHEET_ID = os.getenv('ROCKET_LEAGUE_SHEET_ID', '')  # Add to .env
+SHEET_CHECK_INTERVAL = 30  # Check every 30 seconds
 
-# Game Definitions
+# Matchmaking Configuration
+TEAM_SIZE = 3
+MATCH_SIZE = TEAM_SIZE * 2
+SKILL_IMBALANCE_THRESHOLD = 3
+MAX_QUEUE_EXPANSION = 4
+POINTS_ENTRY_TIMEOUT = 600  # Keep for other games
+
+# Game Definitions with stat types
 GAMES = {
     'halo_slayer': {
         'name': 'Halo: CE - Team Slayer',
         'short_name': 'Halo Slayer',
         'emoji': '👽',
-        'team_size': 3,  # 3v3
-        'category_name': '👽 Halo: Team Slayer'
+        'team_size': 3,
+        'category_name': '👽 Halo: Team Slayer',
+        'stat_types': ['points'],  # Traditional points system
+        'uses_sheets': False
     },
     'cod_bo3': {
         'name': 'CoD Black Ops 3 - TDM',
         'short_name': 'CoD BO3',
         'emoji': '🎖️',
-        'team_size': 3,  # 3v3
-        'category_name': '🎖️ CoD: Black Ops 3'
+        'team_size': 3,
+        'category_name': '🎖️ CoD: Black Ops 3',
+        'stat_types': ['points'],
+        'uses_sheets': False
     },
     'halo_ctf': {
         'name': 'Halo: CE - Capture the Flag',
         'short_name': 'Halo CTF',
         'emoji': '🚩',
-        'team_size': 3,  # 3v3
-        'category_name': '🚩 Halo: CTF'
+        'team_size': 3,
+        'category_name': '🚩 Halo: CTF',
+        'stat_types': ['points'],
+        'uses_sheets': False
     },
     'mk1': {
         'name': 'Mortal Kombat 1',
         'short_name': 'MK1',
         'emoji': '🥊',
-        'team_size': 1,  # 1v1
-        'category_name': '🥊 Mortal Kombat 1'
+        'team_size': 1,
+        'category_name': '🥊 Mortal Kombat 1',
+        'stat_types': ['points'],
+        'uses_sheets': False
     },
     'cod_mw': {
         'name': 'CoD 4: MW - Search and Destroy',
         'short_name': 'CoD MW',
         'emoji': '💣',
-        'team_size': 3,  # 3v3
-        'category_name': '💣 CoD: Modern Warfare'
+        'team_size': 3,
+        'category_name': '💣 CoD: Modern Warfare',
+        'stat_types': ['points'],
+        'uses_sheets': False
     },
     'rocket_league': {
         'name': 'Rocket League',
         'short_name': 'Rocket League',
         'emoji': '🚗',
-        'team_size': 3,  # 3v3
-        'category_name': '🚗 Rocket League'
+        'team_size': 3,
+        'category_name': '🚗 Rocket League',
+        'stat_types': ['goals', 'assists', 'saves', 'shots'],  # Custom stats
+        'uses_sheets': True  # Uses Google Sheets
     }
 }
 

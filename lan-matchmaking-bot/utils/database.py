@@ -77,6 +77,7 @@ class Database:
         return result
 
     # Game Stats Methods
+    '''
     async def get_game_stats(self, user_id: int, game_id: str):
         """Get player stats for specific game"""
         stats = await self.db.game_stats.find_one({
@@ -95,6 +96,37 @@ class Database:
                 'losses': 0,
                 'queue_priority': 0
             }
+            await self.db.game_stats.insert_one(stats)
+
+        return stats
+    '''
+    async def get_game_stats(self, user_id: int, game_id: str):
+        """Get player stats for specific game"""
+        stats = await self.db.game_stats.find_one({
+            'user_id': user_id,
+            'game_id': game_id
+        })
+
+        if not stats:
+            # Create default stats based on game type
+            game_info = config.GAMES.get(game_id, {})
+            stat_types = game_info.get('stat_types', ['points'])
+
+            stats = {
+                'user_id': user_id,
+                'game_id': game_id,
+                'points': 0,
+                'matches_played': 0,
+                'wins': 0,
+                'losses': 0,
+                'queue_priority': 0
+            }
+
+            # Add custom stat fields
+            for stat_type in stat_types:
+                if stat_type != 'points':
+                    stats[stat_type] = 0
+
             await self.db.game_stats.insert_one(stats)
 
         return stats
@@ -184,6 +216,8 @@ class Database:
     async def set_enabled_games(self, game_ids: list):
         """Set which games are enabled"""
         await self.set_system_setting('enabled_games', game_ids)
+
+
 
 
 # Global database instance

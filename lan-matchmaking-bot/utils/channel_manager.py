@@ -132,18 +132,34 @@ class MultiGameChannelManager:
                 wins = player_stats['wins']
                 win_rate = (wins / matches * 100) if matches > 0 else 0
 
-                leaderboard_text += (
-                    f"{medal} **{player_stats['username']}**\n"
-                    f"     └ Points: {player_stats['points']} | "
-                    f"Matches: {matches} | "
-                    f"Wins: {wins} ({win_rate:.0f}%)\n\n"
-                )
+                # Check if this game uses custom stats
+                if game_id == 'rocket_league':
+                    # Show Rocket League specific stats
+                    leaderboard_text += (
+                        f"{medal} **{player_stats['username']}**\n"
+                        f"     └ Points: {player_stats['points']} | "
+                        f"⚽ {player_stats.get('goals', 0)} | "
+                        f"🎯 {player_stats.get('assists', 0)} | "
+                        f"🛡️ {player_stats.get('saves', 0)} | "
+                        f"🎾 {player_stats.get('shots', 0)}\n\n"
+                    )
+                else:
+                    # Standard display for other games
+                    leaderboard_text += (
+                        f"{medal} **{player_stats['username']}**\n"
+                        f"     └ Points: {player_stats['points']} | "
+                        f"Matches: {matches} | "
+                        f"Wins: {wins} ({win_rate:.0f}%)\n\n"
+                    )
 
             embed.description = leaderboard_text
         else:
             embed.add_field(name="No Data", value="*No matches played yet*", inline=False)
 
-        embed.set_footer(text="Updated")
+        if game_id == 'rocket_league':
+            embed.set_footer(text="⚽Goals 🎯Assists 🛡️Saves 🎾Shots • Updated")
+        else:
+            embed.set_footer(text="Updated")
 
         await channel.purge(limit=100)
         await channel.send(embed=embed)

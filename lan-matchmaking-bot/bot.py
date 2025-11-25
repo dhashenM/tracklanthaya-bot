@@ -4,6 +4,7 @@ import config
 from utils.database import db
 from utils.channel_manager import get_channel_manager
 import asyncio
+from utils.sheets_manager import get_sheets_manager
 
 # Bot intents (permissions)
 intents = discord.Intents.default()
@@ -62,6 +63,11 @@ async def on_ready():
     except Exception as e:
         print(f"⚠️ Error setting up channels: {e}")
 
+    # Start Google Sheets sync loop
+    if config.GOOGLE_SHEETS_ENABLED:
+        sheets_mgr = get_sheets_manager(bot)
+        asyncio.create_task(sheets_mgr.start_sync_loop())
+
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -81,6 +87,11 @@ async def on_command_error(ctx, error):
 async def on_close():
     """Called when bot shuts down"""
     await db.close()
+
+    # Stop sheets sync
+    if config.GOOGLE_SHEETS_ENABLED:
+        sheets_mgr = get_sheets_manager(bot)
+        sheets_mgr.stop_sync_loop()
 
 
 @bot.command(name='sync')
@@ -308,6 +319,24 @@ async def help_command(ctx):
 
     await ctx.send(embed=embed)
 
+
+@bot.command(name='syncsheets')
+@commands.is_owner()
+async def sync_sheets(ctx):
+    """Manually sync Google Sheets data"""
+    if not config.GOOGLE_SHEETS_ENABLED:
+        await ctx.send("❌ Google Sheets integration is disabled")
+        return
+
+    await ctx.send("🔄 Syncing Rocket League stats...")
+
+    sheets_mgr = get_sheets_manager(bot)
+    success = await sheets_mgr.sync_rocket_league_stats(ctx.guild)
+
+    if success:
+        await ctx.send("✅ Rocket League stats synced successfully!")
+    else:
+        await ctx.send("⚠️ No changes detected or sync failed")
 
 # Run the bot
 if __name__ == "__main__":
