@@ -15,6 +15,10 @@ class MultiGameChannelManager:
         """Set up channels for all games"""
         for game_id, game_info in config.GAMES.items():
             await self.setup_game_channels(guild, game_id)
+
+        # Setup total leaderboard
+        await self.setup_total_leaderboard(guild)
+
         print("✅ All game channels set up")
 
     async def setup_game_channels(self, guild, game_id: str):
@@ -265,6 +269,117 @@ class MultiGameChannelManager:
         await channel.purge(limit=100)
         await channel.send(embed=embed)
 
+    async def setup_total_leaderboard(self, guild):
+        """Set up the overall leaderboard category and channel"""
+        # Find or create category
+        category = discord.utils.get(guild.categories, name=config.TOTAL_LEADERBOARD_CATEGORY)
+        if not category:
+            category = await guild.create_category(config.TOTAL_LEADERBOARD_CATEGORY)
+
+        # Create channel
+        channel = discord.utils.get(guild.text_channels, name=config.TOTAL_LEADERBOARD_CHANNEL, category=category)
+        if not channel:
+            channel = await guild.create_text_channel(config.TOTAL_LEADERBOARD_CHANNEL, category=category)
+
+        # Set permissions (read-only)
+        await channel.set_permissions(
+            guild.me,
+            send_messages=True,
+            embed_links=True,
+            read_messages=True,
+            read_message_history=True,
+            manage_messages=True
+        )
+        await channel.set_permissions(
+            guild.default_role,
+            send_messages=False,
+            add_reactions=False
+        )
+
+        # Store channel ID
+        self.total_leaderboard_channel_id = channel.id
+
+        # Initial update
+        await self.update_total_leaderboard(guild)
+
+        print("✅ Total leaderboard set up")
+
+    async def update_total_leaderboard(self, guild):
+        """Update the overall leaderboard showing total points across all games"""
+        channel_id = getattr(self, 'total_leaderboard_channel_id', None)
+
+        if not channel_id:
+            # Try to find it
+            category = discord.utils.get(guild.categories, name=config.TOTAL_LEADERBOARD_CATEGORY)
+            if category:
+                channel = discord.utils.get(guild.text_channels, name=config.TOTAL_LEADERBOARD_CHANNEL,
+                                            category=category)
+                if channel:
+                    channel_id = channel.id
+                    self.total_leaderboard_channel_id = channel_id
+
+        if not channel_id:
+            return
+
+        channel = guild.get_channel(channel_id)
+        if not channel:
+            return
+
+        # Get all players and calculate total points
+        all_players = await db.get_all_players()
+
+        player_totals = []
+
+        for player in all_players:
+            total_points = 0
+            total_matches = 0
+
+            # Sum across all games
+            for game_id in config.GAMES.keys():
+                stats = await db.get_game_stats(player['user_id'], game_id)
+                total_points += stats.get('points', 0)
+                total_matches += stats.get('matches_played', 0)
+
+            if total_points > 0 or total_matches > 0:
+                player_totals.append({
+                    'username': player['username'],
+                    'total_points': total_points,
+                    'total_matches': total_matches,
+                    'user_id': player['user_id']
+                })
+
+        # Sort by total points
+        player_totals.sort(key=lambda x: x['total_points'], reverse=True)
+
+        embed = discord.Embed(
+            title="🏆 Overall Leaderboard",
+            description="Total points across all games",
+            color=discord.Color.gold(),
+            timestamp=datetime.utcnow()
+        )
+
+        if player_totals:
+            leaderboard_text = ""
+            for i, player in enumerate(player_totals[:20], 1):  # Top 20
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"`{i:2d}.`"
+
+                leaderboard_text += (
+                    f"{medal} **{player['username']}**\n"
+                    f"     └ Total Points: {player['total_points']:.2f} | "
+                    f"Total Matches: {player['total_matches']}\n\n"
+                )
+
+            embed.description = leaderboard_text
+        else:
+            embed.add_field(name="No Data", value="*No matches played yet*", inline=False)
+
+        embed.set_footer(text="Combined score from all games • Updated")
+
+        try:
+            await channel.purge(limit=100)
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"Error updating total leaderboard: {e}")
 
 # Global instance
 channel_manager = None

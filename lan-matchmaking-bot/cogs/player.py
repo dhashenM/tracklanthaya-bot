@@ -278,6 +278,22 @@ class PlayerCommands(commands.Cog):
             color=discord.Color.blue()
         )
 
+        # Calculate total points and matches
+        total_points = 0
+        total_matches = 0
+
+        for game_id in config.GAMES.keys():
+            stats = await db.get_game_stats(target_user.id, game_id)
+            total_points += stats.get('points', 0)
+            total_matches += stats.get('matches_played', 0)
+
+        # Show totals at top
+        embed.add_field(
+            name="📊 Overall Stats",
+            value=f"**Total Points:** {total_points:.2f}\n**Total Matches:** {total_matches}",
+            inline=False
+        )
+
         # Show current match status
         if player.get('current_match_game'):
             game_info = config.GAMES[player['current_match_game']]
@@ -298,23 +314,24 @@ class PlayerCommands(commands.Cog):
                 inline=False
             )
 
-        # Show stats for ALL games (not just enabled ones)
-        embed.add_field(name="📊 Game Statistics", value="", inline=False)
+        # Show stats for ALL games
+        embed.add_field(name="🎮 Game Statistics", value="", inline=False)
 
         for game_id, game_info in config.GAMES.items():
             stats = await db.get_game_stats(target_user.id, game_id)
             skill_levels = player.get('skill_levels', {})
             skill = skill_levels.get(game_id, "Not Set")
 
-            # Only show if player has played at least one match OR has set skill
-            if stats['matches_played'] > 0 or skill != "Not Set":
-                win_rate = (stats['wins'] / stats['matches_played'] * 100) if stats['matches_played'] > 0 else 0
+            points = stats.get('points', 0)
+            matches = stats.get('matches_played', 0)
 
+            # Only show if player has played or set skill
+            if points > 0 or matches > 0 or skill != "Not Set":
                 skill_text = f"{skill}/10" if skill != "Not Set" else "❌ Not Set"
 
                 stats_text = (
-                    f"Skill: {skill_text} | Points: {stats['points']}\n"
-                    f"Matches: {stats['matches_played']} | Wins: {stats['wins']} ({win_rate:.0f}%)"
+                    f"Skill: {skill_text}\n"
+                    f"Points: {points:.2f} | Matches: {matches}"
                 )
 
                 embed.add_field(

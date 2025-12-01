@@ -4,15 +4,16 @@ import config
 from utils.database import db
 from utils.channel_manager import get_channel_manager
 import asyncio
+import re
 
 
 class SheetsManager:
-    """Manages Google Sheets integration"""
+    """Manages Google Sheets integration for all games"""
 
     def __init__(self, bot):
         self.bot = bot
         self.client = None
-        self.last_known_data = {}  # Track changes
+        self.last_known_hash = None
         self.is_running = False
 
     def connect(self):
@@ -38,125 +39,219 @@ class SheetsManager:
             print(f"⚠️ Failed to connect to Google Sheets: {e}")
             return False
 
-    async def get_rocket_league_data(self):
-        """Fetch Rocket League data from Google Sheet"""
+    def parse_column_name(self, raw_name):
+        """Parse column name to extract game and type"""
+        # Examples: "Halo: TS_Score", "BO3_Matches", "Total_Score"
+        raw_name = raw_name.strip()
+
+        if '_' not in raw_name:
+            return None, None
+
+        parts = raw_name.split('_')
+        game_part = '_'.join(parts[:-1])  # Everything before last underscore
+        type_part = parts[-1].lower()  # score or matches
+
+        return game_part, type_part
+
+    async def get_master_sheet_data(self):
+        """Fetch all player data from master sheet"""
         if not self.client:
             return None
 
         try:
-            sheet = self.client.open_by_key(config.ROCKET_LEAGUE_SHEET_ID)
+            sheet = self.client.open_by_key(config.MASTER_SHEET_ID)
             worksheet = sheet.get_worksheet(0)  # First sheet
 
             # Get all values
-            data = worksheet.get_all_values()
+            all_data = worksheet.get_all_values()
 
-            if not data or len(data) < 2:
+            if not all_data or len(all_data) < 3:
+                print("⚠️ Sheet doesn't have enough rows")
                 return None
 
-            # Parse header
-            headers = [h.strip().lower() for h in data[0]]
+            # The sheet has 3 header rows:
+            # Row 1: General headers
+            # Row 2: Game names
+            # Row 3: Score/Matches labels
 
-            # Expected headers
-            if 'username' not in headers:
-                print("⚠️ Sheet must have 'Username' column")
-                return None
+            # We'll use row 2 and 3 to construct column identifiers
+            row2 = all_data[1]  # Game names
+            row3 = all_data[2]  # Score/Matches
 
-            # Parse rows
-            parsed_data = []
-            for row in data[1:]:  # Skip header
-                if not row or not row[0].strip():  # Skip empty rows
+            # Build column mapping
+            column_map = {}
+
+            for i, (game_name, stat_type) in enumerate(zip(row2, row3)):
+                game_name = game_name.strip()
+                stat_type = stat_type.strip().lower()
+
+                if not game_name or not stat_type:
                     continue
 
-                row_data = {}
-                for i, header in enumerate(headers):
-                    if i < len(row):
-                        value = row[i].strip()
-                        # Convert numbers
-                        if header in ['goals', 'assists', 'saves', 'shots']:
-                            try:
-                                row_data[header] = int(value) if value else 0
-                            except ValueError:
-                                row_data[header] = 0
-                        else:
-                            row_data[header] = value
+                # Create identifier
+                if stat_type in ['score', 'matches']:
+                    column_map[i] = {
+                        'game': game_name,
+                        'type': stat_type
+                    }
 
-                if row_data.get('username'):
-                    parsed_data.append(row_data)
+            # Find required columns
+            name_col = None
+            discord_id_col = None
 
-            return parsed_data
+            for i, header in enumerate(all_data[0]):
+                header_lower = header.strip().lower()
+                if 'name' in header_lower and name_col is None:
+                    name_col = i
+                elif 'discord' in header_lower:
+                    discord_id_col = i
+
+            if name_col is None:
+                print("⚠️ Could not find 'Name' column")
+                return None
+
+            # Parse data rows (start from row 4, index 3)
+            players_data = []
+
+            for row in all_data[3:]:
+                if not row or len(row) <= max(name_col, discord_id_col or 0):
+                    continue
+
+                name = row[name_col].strip() if name_col < len(row) else ""
+                discord_id = row[discord_id_col].strip() if discord_id_col and discord_id_col < len(row) else ""
+
+                if not name:
+                    continue
+
+                player_data = {
+                    'name': name,
+                    'discord_id': discord_id,
+                    'games': {}
+                }
+
+                # Extract game stats
+                for col_idx, col_info in column_map.items():
+                    if col_idx >= len(row):
+                        continue
+
+                    value = row[col_idx].strip()
+                    game_name = col_info['game']
+                    stat_type = col_info['type']
+
+                    # Initialize game entry
+                    if game_name not in player_data['games']:
+                        player_data['games'][game_name] = {}
+
+                    # Parse value
+                    try:
+                        if stat_type == 'score':
+                            player_data['games'][game_name]['score'] = float(value) if value else 0.0
+                        elif stat_type == 'matches':
+                            player_data['games'][game_name]['matches'] = int(float(value)) if value else 0
+                    except ValueError:
+                        pass
+
+                players_data.append(player_data)
+
+            return players_data
 
         except Exception as e:
-            print(f"⚠️ Error reading Rocket League sheet: {e}")
+            print(f"⚠️ Error reading master sheet: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
-    async def sync_rocket_league_stats(self, guild):
-        """Sync Rocket League stats from sheet to database"""
-        data = await self.get_rocket_league_data()
+    def map_sheet_game_to_game_id(self, sheet_game_name):
+        """Map sheet game name to internal game ID"""
+        # Create mapping
+        for game_id, game_info in config.GAMES.items():
+            if game_info['short_name'] == sheet_game_name:
+                return game_id
+        return None
+
+    async def sync_all_stats(self, guild):
+        """Sync all player stats from sheet to database"""
+        data = await self.get_master_sheet_data()
 
         if not data:
             return False
 
-        # Convert to hashable format for change detection
+        # Check for changes
         data_hash = str(sorted([str(d) for d in data]))
 
-        # Check if data changed
-        if data_hash == self.last_known_data.get('rocket_league'):
+        if data_hash == self.last_known_hash:
             return False  # No changes
 
-        self.last_known_data['rocket_league'] = data_hash
+        self.last_known_hash = data_hash
 
-        print(f"📊 Syncing Rocket League stats from Google Sheets...")
+        print(f"📊 Syncing stats from Google Sheets...")
 
-        updated_count = 0
+        updated_players = set()
+        updated_games = set()
 
         for player_data in data:
-            username = player_data['username']
+            name = player_data['name']
+            discord_id = player_data['discord_id']
 
-            # Find player by username (case-insensitive)
-            players = await db.get_all_players()
+            # Find player - prefer by Discord ID, fallback to username
             player = None
-            for p in players:
-                if p['username'].lower() == username.lower():
-                    player = p
-                    break
+
+            if discord_id:
+                # Try to find by Discord ID first
+                all_players = await db.get_all_players()
+                for p in all_players:
+                    if str(p['user_id']) == discord_id or p['username'] == discord_id:
+                        player = p
+                        break
 
             if not player:
-                print(f"⚠️ Player '{username}' not found in database. Skipping.")
+                # Try by username
+                all_players = await db.get_all_players()
+                for p in all_players:
+                    if p['username'].lower() == name.lower():
+                        player = p
+                        break
+
+            if not player:
+                print(f"⚠️ Player '{name}' (Discord ID: {discord_id or 'N/A'}) not found. Skipping.")
                 continue
 
-            # Update stats
-            stats = await db.get_game_stats(player['user_id'], 'rocket_league')
+            # Update stats for each game
+            for sheet_game_name, game_stats in player_data['games'].items():
+                game_id = self.map_sheet_game_to_game_id(sheet_game_name)
 
-            # Calculate total points (you can adjust the formula)
-            total_points = (
-                    player_data.get('goals', 0) * 10 +  # 10 points per goal
-                    player_data.get('assists', 0) * 5 +  # 5 points per assist
-                    player_data.get('saves', 0) * 3 +  # 3 points per save
-                    player_data.get('shots', 0) * 1  # 1 point per shot
-            )
+                if not game_id:
+                    continue
 
-            # Store detailed stats
-            await db.update_game_stats(player['user_id'], 'rocket_league', {
-                'points': total_points,
-                'goals': player_data.get('goals', 0),
-                'assists': player_data.get('assists', 0),
-                'saves': player_data.get('saves', 0),
-                'shots': player_data.get('shots', 0),
-                # Keep match counts if they exist
-                'matches_played': stats.get('matches_played', 0),
-                'wins': stats.get('wins', 0),
-                'losses': stats.get('losses', 0),
-                'queue_priority': stats.get('queue_priority', 0)
-            })
+                score = game_stats.get('score', 0)
+                matches = game_stats.get('matches', 0)
 
-            updated_count += 1
+                # Get current stats
+                current_stats = await db.get_game_stats(player['user_id'], game_id)
 
-        print(f"✅ Updated {updated_count} Rocket League player stats")
+                # Update with sheet data
+                await db.update_game_stats(player['user_id'], game_id, {
+                    'points': score,
+                    'matches_played': matches,
+                    # Preserve other fields
+                    'wins': current_stats.get('wins', 0),
+                    'losses': current_stats.get('losses', 0),
+                    'queue_priority': current_stats.get('queue_priority', 0)
+                })
 
-        # Update leaderboard channel
-        if guild and updated_count > 0:
+                updated_players.add(player['username'])
+                updated_games.add(game_id)
+
+        print(f"✅ Updated {len(updated_players)} players across {len(updated_games)} games")
+
+        # Update leaderboard channels for affected games
+        if guild and updated_games:
             cm = get_channel_manager(self.bot)
-            await cm.update_leaderboard(guild, 'rocket_league')
+            for game_id in updated_games:
+                await cm.update_leaderboard(guild, game_id)
+
+            # Update total leaderboard
+            await cm.update_total_leaderboard(guild)
 
         return True
 
@@ -182,12 +277,14 @@ class SheetsManager:
                     break
 
                 if guild:
-                    await self.sync_rocket_league_stats(guild)
+                    await self.sync_all_stats(guild)
 
                 await asyncio.sleep(config.SHEET_CHECK_INTERVAL)
 
             except Exception as e:
                 print(f"⚠️ Error in sheets sync loop: {e}")
+                import traceback
+                traceback.print_exc()
                 await asyncio.sleep(config.SHEET_CHECK_INTERVAL)
 
     def stop_sync_loop(self):

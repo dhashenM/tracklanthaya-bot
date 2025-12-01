@@ -328,13 +328,13 @@ async def sync_sheets(ctx):
         await ctx.send("❌ Google Sheets integration is disabled")
         return
 
-    await ctx.send("🔄 Syncing Rocket League stats...")
+    await ctx.send("🔄 Syncing all game stats from master sheet...")
 
     sheets_mgr = get_sheets_manager(bot)
-    success = await sheets_mgr.sync_rocket_league_stats(ctx.guild)
+    success = await sheets_mgr.sync_all_stats(ctx.guild)
 
     if success:
-        await ctx.send("✅ Rocket League stats synced successfully!")
+        await ctx.send("✅ All game stats synced successfully!")
     else:
         await ctx.send("⚠️ No changes detected or sync failed")
 

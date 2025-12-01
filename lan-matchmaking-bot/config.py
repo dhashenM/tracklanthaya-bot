@@ -11,7 +11,7 @@ ADMIN_ROLE_NAME = os.getenv('ADMIN_ROLE_NAME', 'Admin')
 
 # Google Sheets Configuration
 GOOGLE_SHEETS_ENABLED = os.getenv('GOOGLE_SHEETS_ENABLED', 'True').lower() == 'true'
-ROCKET_LEAGUE_SHEET_ID = os.getenv('ROCKET_LEAGUE_SHEET_ID', '')  # Add to .env
+MASTER_SHEET_ID = os.getenv('MASTER_SHEET_ID', '')  # Your main sheet ID
 SHEET_CHECK_INTERVAL = 30  # Check every 30 seconds
 
 # Matchmaking Configuration
@@ -19,65 +19,69 @@ TEAM_SIZE = 3
 MATCH_SIZE = TEAM_SIZE * 2
 SKILL_IMBALANCE_THRESHOLD = 3
 MAX_QUEUE_EXPANSION = 4
-POINTS_ENTRY_TIMEOUT = 600  # Keep for other games
+POINTS_ENTRY_TIMEOUT = 600
 
-# Game Definitions with stat types
+# Game Definitions - Column mapping for Google Sheets
 GAMES = {
     'halo_slayer': {
         'name': 'Halo: CE - Team Slayer',
-        'short_name': 'Halo Slayer',
+        'short_name': 'Halo: TS',
         'emoji': '👽',
         'team_size': 3,
         'category_name': '👽 Halo: Team Slayer',
-        'stat_types': ['points'],  # Traditional points system
-        'uses_sheets': False
+        'sheet_score_col': 'Halo: TS_Score',  # Column header in sheet
+        'sheet_matches_col': 'Halo: TS_Matches'
     },
     'cod_bo3': {
         'name': 'CoD Black Ops 3 - TDM',
-        'short_name': 'CoD BO3',
+        'short_name': 'BO3',
         'emoji': '🎖️',
         'team_size': 3,
         'category_name': '🎖️ CoD: Black Ops 3',
-        'stat_types': ['points'],
-        'uses_sheets': False
+        'sheet_score_col': 'BO3_Score',
+        'sheet_matches_col': 'BO3_Matches'
     },
     'halo_ctf': {
         'name': 'Halo: CE - Capture the Flag',
-        'short_name': 'Halo CTF',
+        'short_name': 'Halo: CTF',
         'emoji': '🚩',
         'team_size': 3,
         'category_name': '🚩 Halo: CTF',
-        'stat_types': ['points'],
-        'uses_sheets': False
+        'sheet_score_col': 'Halo: CTF_Score',
+        'sheet_matches_col': 'Halo: CTF_Matches'
     },
     'mk1': {
-        'name': 'Mortal Kombat 1',
-        'short_name': 'MK1',
+        'name': 'Mortal Kombat 11',
+        'short_name': 'MK11',
         'emoji': '🥊',
         'team_size': 1,
-        'category_name': '🥊 Mortal Kombat 1',
-        'stat_types': ['points'],
-        'uses_sheets': False
+        'category_name': '🥊 Mortal Kombat 11',
+        'sheet_score_col': 'MK11_Score',
+        'sheet_matches_col': 'MK11_Matches'
     },
     'cod_mw': {
         'name': 'CoD 4: MW - Search and Destroy',
-        'short_name': 'CoD MW',
+        'short_name': 'MW',
         'emoji': '💣',
         'team_size': 3,
         'category_name': '💣 CoD: Modern Warfare',
-        'stat_types': ['points'],
-        'uses_sheets': False
+        'sheet_score_col': 'MW_Score',
+        'sheet_matches_col': 'MW_Matches'
     },
     'rocket_league': {
         'name': 'Rocket League',
-        'short_name': 'Rocket League',
+        'short_name': 'RL',
         'emoji': '🚗',
         'team_size': 3,
         'category_name': '🚗 Rocket League',
-        'stat_types': ['goals', 'assists', 'saves', 'shots'],  # Custom stats
-        'uses_sheets': True  # Uses Google Sheets
+        'sheet_score_col': 'RL_Score',
+        'sheet_matches_col': 'RL_Matches'
     }
 }
+
+# Total leaderboard category
+TOTAL_LEADERBOARD_CATEGORY = "🏆 Overall Leaderboard"
+TOTAL_LEADERBOARD_CHANNEL = "🏆│total-leaderboard"
 
 # Channel Configuration
 TEAM1_CHANNEL_NAME = "🔴 Team 1"
