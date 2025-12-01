@@ -132,38 +132,20 @@ class MultiGameChannelManager:
             for i, player_stats in enumerate(players, 1):
                 medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"`{i:2d}.`"
 
-                matches = player_stats['matches_played']
-                wins = player_stats['wins']
-                win_rate = (wins / matches * 100) if matches > 0 else 0
+                points = player_stats.get('points', 0)
+                matches = player_stats.get('matches_played', 0)
 
-                # Check if this game uses custom stats
-                if game_id == 'rocket_league':
-                    # Show Rocket League specific stats
-                    leaderboard_text += (
-                        f"{medal} **{player_stats['username']}**\n"
-                        f"     └ Points: {player_stats['points']} | "
-                        f"⚽ {player_stats.get('goals', 0)} | "
-                        f"🎯 {player_stats.get('assists', 0)} | "
-                        f"🛡️ {player_stats.get('saves', 0)} | "
-                        f"🎾 {player_stats.get('shots', 0)}\n\n"
-                    )
-                else:
-                    # Standard display for other games
-                    leaderboard_text += (
-                        f"{medal} **{player_stats['username']}**\n"
-                        f"     └ Points: {player_stats['points']} | "
-                        f"Matches: {matches} | "
-                        f"Wins: {wins} ({win_rate:.0f}%)\n\n"
-                    )
+                # Simple display: just points and matches
+                leaderboard_text += (
+                    f"{medal} **{player_stats['username']}**\n"
+                    f"     └ Points: {points:.2f} | Matches: {matches}\n\n"
+                )
 
             embed.description = leaderboard_text
         else:
             embed.add_field(name="No Data", value="*No matches played yet*", inline=False)
 
-        if game_id == 'rocket_league':
-            embed.set_footer(text="⚽Goals 🎯Assists 🛡️Saves 🎾Shots • Updated")
-        else:
-            embed.set_footer(text="Updated")
+        embed.set_footer(text="Updated")
 
         await channel.purge(limit=100)
         await channel.send(embed=embed)

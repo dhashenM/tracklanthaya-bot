@@ -52,16 +52,23 @@ async def on_ready():
     try:
         for guild in bot.guilds:
             cm = get_channel_manager(bot)
+
+            # Always setup total leaderboard
+            await cm.setup_total_leaderboard(guild)
+
             enabled_games = await db.get_enabled_games()
 
             if enabled_games:
                 print(f"🎮 Setting up channels for enabled games: {', '.join(enabled_games)}")
                 for game_id in enabled_games:
                     await cm.setup_game_channels(guild, game_id)
+                print("✅ All game channels ready")
             else:
                 print("ℹ️ No games enabled yet. Use /enablegames to start!")
     except Exception as e:
         print(f"⚠️ Error setting up channels: {e}")
+        import traceback
+        traceback.print_exc()
 
     # Start Google Sheets sync loop
     if config.GOOGLE_SHEETS_ENABLED:
@@ -337,6 +344,18 @@ async def sync_sheets(ctx):
         await ctx.send("✅ All game stats synced successfully!")
     else:
         await ctx.send("⚠️ No changes detected or sync failed")
+
+@bot.command(name='setuptotal')
+@commands.is_owner()
+async def setup_total(ctx):
+    """Manually setup total leaderboard"""
+    await ctx.send("🏆 Setting up total leaderboard...")
+    try:
+        cm = get_channel_manager(bot)
+        await cm.setup_total_leaderboard(ctx.guild)
+        await ctx.send("✅ Total leaderboard created!")
+    except Exception as e:
+        await ctx.send(f"❌ Error: {e}")
 
 # Run the bot
 if __name__ == "__main__":

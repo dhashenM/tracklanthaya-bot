@@ -58,108 +58,140 @@ class SheetsManager:
         if not self.client:
             return None
 
-        try:
-            sheet = self.client.open_by_key(config.MASTER_SHEET_ID)
-            worksheet = sheet.get_worksheet(0)  # First sheet
+        # Retry logic for temporary failures
+        max_retries = 3
+        retry_delay = 5  # seconds
 
-            # Get all values
-            all_data = worksheet.get_all_values()
+        for attempt in range(max_retries):
+            try:
+                sheet = self.client.open_by_key(config.MASTER_SHEET_ID)
+                worksheet = sheet.get_worksheet(0)  # First sheet
 
-            if not all_data or len(all_data) < 3:
-                print("⚠️ Sheet doesn't have enough rows")
-                return None
+                # Get all values
+                all_data = worksheet.get_all_values()
 
-            # The sheet has 3 header rows:
-            # Row 1: General headers
-            # Row 2: Game names
-            # Row 3: Score/Matches labels
+                if not all_data or len(all_data) < 3:
+                    print("⚠️ Sheet doesn't have enough rows")
+                    return None
 
-            # We'll use row 2 and 3 to construct column identifiers
-            row2 = all_data[1]  # Game names
-            row3 = all_data[2]  # Score/Matches
+                # The sheet has 3 header rows:
+                # Row 1: General headers
+                # Row 2: Game names
+                # Row 3: Score/Matches labels
 
-            # Build column mapping
-            column_map = {}
+                # We'll use row 2 and 3 to construct column identifiers
+                row2 = all_data[1]  # Game names
+                row3 = all_data[2]  # Score/Matches
 
-            for i, (game_name, stat_type) in enumerate(zip(row2, row3)):
-                game_name = game_name.strip()
-                stat_type = stat_type.strip().lower()
+                # Build column mapping
+                # Strategy: Find game names in row2, then look for Score/Matches in row3 in nearby columns
+                column_map = {}
+                current_game = None
 
-                if not game_name or not stat_type:
-                    continue
+                for i in range(len(row2)):
+                    # Check row 2 for game name
+                    if i < len(row2) and row2[i].strip():
+                        current_game = row2[i].strip()
 
-                # Create identifier
-                if stat_type in ['score', 'matches']:
-                    column_map[i] = {
-                        'game': game_name,
-                        'type': stat_type
-                    }
+                    # Check row 3 for stat type
+                    if i < len(row3):
+                        stat_type = row3[i].strip().lower()
 
-            # Find required columns
-            name_col = None
-            discord_id_col = None
+                        if current_game and stat_type in ['score', 'matches']:
+                            column_map[i] = {
+                                'game': current_game,
+                                'type': stat_type
+                            }
+                            #print(f"DEBUG - Column {i}: {current_game} - {stat_type}")
 
-            for i, header in enumerate(all_data[0]):
-                header_lower = header.strip().lower()
-                if 'name' in header_lower and name_col is None:
-                    name_col = i
-                elif 'discord' in header_lower:
-                    discord_id_col = i
+                # Find required columns
+                name_col = None
+                discord_id_col = None
 
-            if name_col is None:
-                print("⚠️ Could not find 'Name' column")
-                return None
+                for i, header in enumerate(all_data[0]):
+                    header_lower = header.strip().lower()
+                    if 'name' in header_lower and name_col is None:
+                        name_col = i
+                    elif 'discord' in header_lower:
+                        discord_id_col = i
 
-            # Parse data rows (start from row 4, index 3)
-            players_data = []
+                if name_col is None:
+                    print("⚠️ Could not find 'Name' column")
+                    return None
 
-            for row in all_data[3:]:
-                if not row or len(row) <= max(name_col, discord_id_col or 0):
-                    continue
+                # Parse data rows (start from row 4, index 3)
+                players_data = []
 
-                name = row[name_col].strip() if name_col < len(row) else ""
-                discord_id = row[discord_id_col].strip() if discord_id_col and discord_id_col < len(row) else ""
-
-                if not name:
-                    continue
-
-                player_data = {
-                    'name': name,
-                    'discord_id': discord_id,
-                    'games': {}
-                }
-
-                # Extract game stats
-                for col_idx, col_info in column_map.items():
-                    if col_idx >= len(row):
+                for row in all_data[3:]:
+                    if not row or len(row) <= max(name_col, discord_id_col or 0):
                         continue
 
-                    value = row[col_idx].strip()
-                    game_name = col_info['game']
-                    stat_type = col_info['type']
+                    name = row[name_col].strip() if name_col < len(row) else ""
+                    discord_id = row[discord_id_col].strip() if discord_id_col and discord_id_col < len(row) else ""
 
-                    # Initialize game entry
-                    if game_name not in player_data['games']:
-                        player_data['games'][game_name] = {}
+                    if not name:
+                        continue
 
-                    # Parse value
-                    try:
-                        if stat_type == 'score':
-                            player_data['games'][game_name]['score'] = float(value) if value else 0.0
-                        elif stat_type == 'matches':
-                            player_data['games'][game_name]['matches'] = int(float(value)) if value else 0
-                    except ValueError:
-                        pass
+                    player_data = {
+                        'name': name,
+                        'discord_id': discord_id,
+                        'games': {}
+                    }
 
-                players_data.append(player_data)
+                    # Extract game stats
+                    for col_idx, col_info in column_map.items():
+                        if col_idx >= len(row):
+                            continue
 
-            return players_data
+                        value = row[col_idx].strip()
+                        game_name = col_info['game']
+                        stat_type = col_info['type']
 
-        except Exception as e:
-            print(f"⚠️ Error reading master sheet: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
+                        # Initialize game entry
+                        if game_name not in player_data['games']:
+                            player_data['games'][game_name] = {}
+
+                        # Parse value
+                        try:
+                            if stat_type == 'score':
+                                player_data['games'][game_name]['score'] = float(value) if value else 0.0
+                            elif stat_type == 'matches':
+                                player_data['games'][game_name]['matches'] = int(float(value)) if value else 0
+                        except ValueError:
+                            pass
+
+                    players_data.append(player_data)
+
+                    # DEBUG: Print first player's data
+                    '''
+                    if len(players_data) == 1:
+                        print(f"DEBUG - First player parsed:")
+                        print(f"  Name: {player_data['name']}")
+                        print(f"  Discord ID: {player_data['discord_id']}")
+                        print(f"  Games: {player_data['games']}")
+                    '''
+
+                return players_data
+
+            except Exception as e:
+                if '503' in str(e) or 'unavailable' in str(e).lower():
+                    # Temporary Google API error - retry
+                    if attempt < max_retries - 1:
+                        print(
+                            f"⚠️ Google Sheets temporarily unavailable (attempt {attempt + 1}/{max_retries}). Retrying in {retry_delay}s...")
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    else:
+                        print(f"⚠️ Google Sheets unavailable after {max_retries} attempts. Will retry next cycle.")
+                        return None
+                else:
+                    # Different error - log and return
+                    print(f"⚠️ Error reading master sheet: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return None
+
+        return None
 
     def map_sheet_game_to_game_id(self, sheet_game_name):
         """Map sheet game name to internal game ID"""
@@ -268,6 +300,9 @@ class SheetsManager:
         self.is_running = True
         print(f"🔄 Starting Google Sheets sync loop (every {config.SHEET_CHECK_INTERVAL}s)")
 
+        consecutive_failures = 0
+        max_consecutive_failures = 5
+
         while self.is_running:
             try:
                 # Get guild
@@ -277,14 +312,23 @@ class SheetsManager:
                     break
 
                 if guild:
-                    await self.sync_all_stats(guild)
+                    success = await self.sync_all_stats(guild)
+                    if success or success is False:  # False means no changes, not an error
+                        consecutive_failures = 0
+                    else:  # None means error
+                        consecutive_failures += 1
 
-                await asyncio.sleep(config.SHEET_CHECK_INTERVAL)
+                # If too many failures, increase delay
+                if consecutive_failures >= max_consecutive_failures:
+                    print(f"⚠️ {consecutive_failures} consecutive sync failures. Increasing delay to 60s.")
+                    await asyncio.sleep(60)
+                    consecutive_failures = 0  # Reset after waiting
+                else:
+                    await asyncio.sleep(config.SHEET_CHECK_INTERVAL)
 
             except Exception as e:
                 print(f"⚠️ Error in sheets sync loop: {e}")
-                import traceback
-                traceback.print_exc()
+                consecutive_failures += 1
                 await asyncio.sleep(config.SHEET_CHECK_INTERVAL)
 
     def stop_sync_loop(self):
