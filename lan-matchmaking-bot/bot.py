@@ -41,6 +41,12 @@ async def on_ready():
         print(f"❌ Error loading cogs: {e}")
         return
 
+    # Register persistent views for buttons
+    from utils.online_button import GameQueueView
+    for game_id in config.GAMES.keys():
+        bot.add_view(GameQueueView(game_id))
+    print("✅ Registered persistent button views")
+
     # Sync commands ONCE after all cogs are loaded
     try:
         synced = await bot.tree.sync()

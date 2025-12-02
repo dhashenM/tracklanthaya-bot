@@ -66,6 +66,34 @@ class MultiGameChannelManager:
                     add_reactions=False
                 )
 
+        # Add online/offline buttons to general channel
+        general_channel = self.get_channel(guild, game_id, 'general')
+        if general_channel:
+            # Clear old messages
+            await general_channel.purge(limit=10)
+
+            # Send button message
+            from utils.online_button import GameQueueView
+
+            embed = discord.Embed(
+                title=f"{game_info['emoji']} {game_info['name']} - Quick Queue",
+                description="Click the buttons below to quickly join or leave the matchmaking queue!",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="📋 How it Works",
+                value=(
+                    "🟢 **Go Online** - Join the matchmaking queue\n"
+                    "⚪ **Go Offline** - Leave the matchmaking queue\n\n"
+                    "You can also use `/online` and `/offline` commands."
+                ),
+                inline=False
+            )
+
+            view = GameQueueView(game_id)
+            await general_channel.send(embed=embed, view=view)
+
+
         # Initial updates for info channels
         await self.update_queue(guild, game_id)
         await self.update_leaderboard(guild, game_id)

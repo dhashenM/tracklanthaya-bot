@@ -389,11 +389,13 @@ class AdminCommands(commands.Cog):
 
     async def handle_end_match_selection(self, interaction: discord.Interaction, selected_games: list):
         """Handle ending match after game selection"""
+        await interaction.response.defer()
+
         game_id = selected_games[0]
         match = await db.get_active_match(game_id)
 
         if not match:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ No active match found!",
                 ephemeral=True
             )
@@ -402,34 +404,56 @@ class AdminCommands(commands.Cog):
         await self.end_specific_match(interaction, game_id, match)
 
     async def end_specific_match(self, interaction: discord.Interaction, game_id: str, match: dict):
-        """End a specific match"""
+        """End a specific match directly (no points verification needed)"""
         game_info = config.GAMES[game_id]
 
-        # Calculate deadline (10 minutes from now)
-        deadline = datetime.utcnow() + timedelta(seconds=config.POINTS_ENTRY_TIMEOUT)
-        deadline_timestamp = int(deadline.timestamp())
-
-        # Update match status
+        # Update match status to completed immediately
         await db.update_match(
             match['_id'],
             {
-                'status': 'awaiting_points',
-                'ended_at': discord.utils.utcnow(),
-                'points_deadline': deadline
+                'status': 'completed',
+                'ended_at': discord.utils.utcnow()
             }
         )
 
-        # Notify players to submit points
+        # Free up all players from this match
         all_players = match['team1'] + match['team2']
+        for player in all_players:
+            # Set player as offline (not in queue)
+            player_data = await db.get_player(player['user_id'])
+            queue_status = player_data.get('queue_status', {})
+
+            # Set this game to offline
+            queue_status[game_id] = 'offline'
+
+            await db.update_player(player['user_id'], {
+                'current_match_game': None,
+                'queue_status': queue_status
+            })
+
+            # Update match count in stats
+            stats = await db.get_game_stats(player['user_id'], game_id)
+            await db.update_game_stats(player['user_id'], game_id, {
+                'matches_played': stats.get('matches_played', 0) + 1
+            })
+
+        # Delete match channels
+        matchmaking_cog = self.bot.get_cog('MatchmakingCommands')
+        if matchmaking_cog:
+            await matchmaking_cog.delete_match_channels(game_id, str(match['_id']))
+
+        # Announce match ended
+        team1_names = ", ".join([p['username'] for p in match['team1']])
+        team2_names = ", ".join([p['username'] for p in match['team2']])
 
         embed = discord.Embed(
-            title=f"{game_info['emoji']} {game_info['name']} - Match Ended!",
-            description=(
-                f"Please submit your points using `/submitpoints <your_points>`\n\n"
-                f"⏰ **Deadline:** <t:{deadline_timestamp}:R> (<t:{deadline_timestamp}:t>)"
-            ),
+            title=f"{game_info['emoji']} {game_info['name']} - Match Ended",
+            description="Match has been completed. Players are now offline.",
             color=discord.Color.blue()
         )
+        embed.add_field(name="🔴 Team 1", value=team1_names, inline=False)
+        embed.add_field(name="🔵 Team 2", value=team2_names, inline=False)
+        embed.set_footer(text="Points will be updated via Google Sheets")
 
         # Send response
         if interaction.response.is_done():
@@ -437,26 +461,33 @@ class AdminCommands(commands.Cog):
         else:
             await interaction.response.send_message(embed=embed)
 
+        # Notify players
         for player in all_players:
             member = interaction.guild.get_member(player['user_id'])
             if member:
                 try:
-                    await member.send(embed=embed)
+                    notify_embed = discord.Embed(
+                        title=f"{game_info['emoji']} Match Ended",
+                        description=f"Your {game_info['name']} match has ended.\n\nYou are now **offline**. Use the button or `/online` command to queue for another match.",
+                        color=discord.Color.blue()
+                    )
+                    await member.send(embed=notify_embed)
                 except:
                     pass
 
         # Update channels
         cm = get_channel_manager(self.bot)
         await cm.update_upcoming_matches(interaction.guild, game_id)
+        await cm.update_queue(interaction.guild, game_id)
+        await cm.update_match_history(interaction.guild, game_id)
 
-        # Start points entry timer
-        matchmaking_cog = self.bot.get_cog('MatchmakingCommands')
+        # Check queue for next match
         if matchmaking_cog:
-            await matchmaking_cog.start_points_entry_timer(
-                interaction.guild,
-                game_id,
-                str(match['_id'])
-            )
+            enabled_games = await db.get_enabled_games()
+            for enabled_game_id in enabled_games:
+                await cm.update_queue(interaction.guild, enabled_game_id)
+                await matchmaking_cog.check_and_create_match(interaction.guild, enabled_game_id)
+
 
     @app_commands.command(name="cancelmatch", description="[ADMIN] Cancel a pending match")
     @app_commands.default_permissions(administrator=True)
@@ -535,166 +566,6 @@ class AdminCommands(commands.Cog):
         matchmaking_cog = self.bot.get_cog('MatchmakingCommands')
         if matchmaking_cog:
             await matchmaking_cog.check_and_create_match(interaction.guild, game_id)
-
-    @app_commands.command(name="verifypoints", description="[ADMIN] Verify and finalize match points")
-    @app_commands.default_permissions(administrator=True)
-    @is_admin()
-    async def verify_points(self, interaction: discord.Interaction):
-        """Verify points for completed match"""
-        await interaction.response.defer()
-
-        # Find all matches awaiting points
-        matches_awaiting = []
-        cursor = db.db.matches.find({'status': 'awaiting_points'})
-        async for match in cursor:
-            matches_awaiting.append(match)
-
-        if not matches_awaiting:
-            await interaction.followup.send(
-                "❌ No matches awaiting point verification!",
-                ephemeral=True
-            )
-            return
-
-        if len(matches_awaiting) == 1:
-            # Only one match awaiting points
-            await self.verify_specific_match(interaction, matches_awaiting[0])
-        else:
-            # Multiple matches awaiting points
-            games_with_awaiting = [m['game_id'] for m in matches_awaiting]
-            view = GameSelectViewAdmin(
-                "verify points for",
-                games_with_awaiting,
-                self.handle_verify_points_selection,
-                max_selections=1
-            )
-            await interaction.followup.send(
-                "🎮 Multiple matches are awaiting verification. Select which one:",
-                view=view,
-                ephemeral=True
-            )
-
-    async def handle_verify_points_selection(self, interaction: discord.Interaction, selected_games: list):
-        """Handle verifying points after game selection"""
-        game_id = selected_games[0]
-        match = await db.db.matches.find_one({'game_id': game_id, 'status': 'awaiting_points'})
-
-        if not match:
-            await interaction.response.send_message(
-                "❌ No match awaiting verification found!",
-                ephemeral=True
-            )
-            return
-
-        await self.verify_specific_match(interaction, match)
-
-    async def verify_specific_match(self, interaction: discord.Interaction, match: dict):
-        """Verify points for a specific match"""
-        game_id = match['game_id']
-        game_info = config.GAMES[game_id]
-
-        points_submitted = match.get('points_submitted', {})
-        all_players = match['team1'] + match['team2']
-
-        # Check if all players submitted points
-        if len(points_submitted) < len(all_players):
-            missing = []
-            for player in all_players:
-                if str(player['user_id']) not in points_submitted:
-                    missing.append(player['username'])
-
-            if interaction.response.is_done():
-                await interaction.followup.send(
-                    f"⚠️ Not all players have submitted points for **{game_info['name']}**!\nMissing: {', '.join(missing)}",
-                    ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    f"⚠️ Not all players have submitted points for **{game_info['name']}**!\nMissing: {', '.join(missing)}",
-                    ephemeral=True
-                )
-            return
-
-        # Calculate team scores
-        team1_score = sum(points_submitted.get(str(p['user_id']), 0) for p in match['team1'])
-        team2_score = sum(points_submitted.get(str(p['user_id']), 0) for p in match['team2'])
-
-        winning_team = 1 if team1_score > team2_score else 2 if team2_score > team1_score else 0
-
-        # Update player stats and points
-        for player in all_players:
-            player_points = points_submitted.get(str(player['user_id']), 0)
-            stats = await db.get_game_stats(player['user_id'], game_id)
-
-            is_winner = (player in match['team1'] and winning_team == 1) or \
-                        (player in match['team2'] and winning_team == 2)
-
-            new_total_points = stats['points'] + player_points
-            new_matches_played = stats['matches_played'] + 1
-            new_wins = stats['wins'] + (1 if is_winner else 0)
-            new_losses = stats['losses'] + (0 if is_winner or winning_team == 0 else 1)
-
-            await db.update_game_stats(player['user_id'], game_id, {
-                'points': new_total_points,
-                'matches_played': new_matches_played,
-                'wins': new_wins,
-                'losses': new_losses,
-                'queue_priority': 0  # Reset priority after match
-            })
-
-            # Clear current_match_game for player
-            await db.update_player(player['user_id'], {'current_match_game': None})
-
-        # Update match
-        await db.update_match(match['_id'], {
-            'status': 'completed',
-            'team1_score': team1_score,
-            'team2_score': team2_score,
-            'winning_team': winning_team,
-            'points_verified': True,
-            'verified_at': discord.utils.utcnow()
-        })
-
-        # Delete channels
-        matchmaking_cog = self.bot.get_cog('MatchmakingCommands')
-        if matchmaking_cog:
-            await matchmaking_cog.delete_match_channels(game_id, str(match['_id']))
-
-        # Announce results
-        embed = discord.Embed(
-            title=f"{game_info['emoji']} {game_info['name']} - Match Complete!",
-            color=discord.Color.gold()
-        )
-
-        team1_names = ", ".join([p['username'] for p in match['team1']])
-        team2_names = ", ".join([p['username'] for p in match['team2']])
-
-        embed.add_field(name="🔴 Team 1", value=f"{team1_names}\nScore: {team1_score}", inline=False)
-        embed.add_field(name="🔵 Team 2", value=f"{team2_names}\nScore: {team2_score}", inline=False)
-
-        if winning_team == 0:
-            embed.add_field(name="Result", value="🤝 It's a tie!", inline=False)
-        else:
-            embed.add_field(name="Winner", value=f"🎉 Team {winning_team} wins!", inline=False)
-
-        # Send response
-        if interaction.response.is_done():
-            await interaction.followup.send(embed=embed)
-        else:
-            await interaction.response.send_message(embed=embed)
-
-        # Update all info channels for this game
-        cm = get_channel_manager(self.bot)
-        await cm.update_leaderboard(interaction.guild, game_id)
-        await cm.update_match_history(interaction.guild, game_id)
-        await cm.update_upcoming_matches(interaction.guild, game_id)
-
-        # Check queues for all enabled games
-        if matchmaking_cog:
-            enabled_games = await db.get_enabled_games()
-            for enabled_game_id in enabled_games:
-                await cm.update_queue(interaction.guild, enabled_game_id)
-                await matchmaking_cog.check_and_create_match(interaction.guild, enabled_game_id)
 
     @app_commands.command(name="setpoints", description="[ADMIN] Set a player's points for a game")
     @app_commands.describe(member="The player", points="New point value")
