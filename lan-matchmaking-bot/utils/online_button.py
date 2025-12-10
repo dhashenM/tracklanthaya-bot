@@ -39,7 +39,7 @@ class OnlineButton(Button):
 
         # Check skill level
         skill_levels = player.get('skill_levels', {})
-        if self.game_id not in skill_levels or skill_levels.get(self.game_id) == 5:
+        if self.game_id not in skill_levels:
             await interaction.response.send_message(
                 f"⚠️ Please set your skill level first for {config.GAMES[self.game_id]['name']}!\n\n"
                 f"Use `/setskill` to set your skill level (1-10).",

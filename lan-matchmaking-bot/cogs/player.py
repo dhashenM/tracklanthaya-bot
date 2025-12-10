@@ -167,8 +167,8 @@ class PlayerCommands(commands.Cog):
         # Check if user needs to set skill for any selected games
         games_need_skill = []
         for game_id in selected_games:
-            # If skill is still default (5) or not set, require them to set it
-            if game_id not in skill_levels or skill_levels.get(game_id) == 5:
+            # Check if skill is not set (missing from dict)
+            if game_id not in skill_levels:
                 games_need_skill.append(game_id)
 
         if games_need_skill:
@@ -263,11 +263,14 @@ class PlayerCommands(commands.Cog):
     @app_commands.command(name="profile", description="View player profile and stats")
     async def profile(self, interaction: discord.Interaction, member: discord.Member = None):
         """View player profile"""
+        # Defer immediately since we're fetching stats for all games
+        await interaction.response.defer(ephemeral=True)
+
         target_user = member if member else interaction.user
         player = await db.get_player(target_user.id)
 
         if not player:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ {'That user is' if member else 'You are'} not registered!",
                 ephemeral=True
             )
@@ -342,7 +345,7 @@ class PlayerCommands(commands.Cog):
 
         # Show as ephemeral if viewing own profile, public if viewing others
         is_self = (member is None or member.id == interaction.user.id)
-        await interaction.response.send_message(embed=embed, ephemeral=is_self)
+        await interaction.followup.send(embed=embed, ephemeral=is_self)
 
     @app_commands.command(name="mystats", description="Quick view of your current queue status")
     async def mystats(self, interaction: discord.Interaction):
