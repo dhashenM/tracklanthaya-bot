@@ -5,14 +5,6 @@ import config
 def calculate_team_balance(players, team1_indices, team_size):
     """
     Calculate skill imbalance between two teams
-
-    Args:
-        players: List of player dicts with 'skill_levels'
-        team1_indices: Tuple of indices for team 1
-        team_size: Number of players per team
-
-    Returns:
-        (team1_players, team2_players, imbalance)
     """
     team1 = [players[i] for i in team1_indices]
     team2 = [players[i] for i, p in enumerate(players) if i not in team1_indices][:team_size]
@@ -28,15 +20,6 @@ def calculate_team_balance(players, team1_indices, team_size):
 def find_balanced_teams(players, game_id, team_size, used_combinations=None):
     """
     Find the most balanced team split for a specific game
-
-    Args:
-        players: List of player dicts
-        game_id: Game identifier
-        team_size: Team size for this game
-        used_combinations: Set of frozensets to avoid repeated team combinations
-
-    Returns:
-        (team1, team2, imbalance, combo_id) or None if no valid split found
     """
     match_size = team_size * 2
 
@@ -87,47 +70,118 @@ def find_balanced_teams(players, game_id, team_size, used_combinations=None):
     return None
 
 
+def find_1v1_match(players, game_id):
+    """
+    Find best 1v1 match based on similar skill levels
+    """
+    if len(players) < 2:
+        return None
+
+    # Enrich with skill levels
+    enriched_players = []
+    for player in players:
+        player_copy = player.copy()
+        player_copy['skill_level'] = player['skill_levels'].get(game_id, 5)
+        enriched_players.append(player_copy)
+
+    # Sort by skill level
+    enriched_players.sort(key=lambda p: p['skill_level'])
+
+    # Find two closest skill levels
+    best_pair = None
+    best_diff = float('inf')
+
+    for i in range(len(enriched_players) - 1):
+        for j in range(i + 1, len(enriched_players)):
+            diff = abs(enriched_players[i]['skill_level'] - enriched_players[j]['skill_level'])
+            if diff < best_diff:
+                best_diff = diff
+                best_pair = (enriched_players[i], enriched_players[j])
+
+    if best_pair:
+        player1, player2 = best_pair
+        return {
+            'team1': [player1],  # Player 1
+            'team2': [player2],  # Player 2
+            'imbalance': best_diff,
+            'combo_id': frozenset([frozenset([player1['user_id']]), frozenset([player2['user_id']])]),
+            'leftover_players': [p for p in enriched_players if
+                                 p['user_id'] not in [player1['user_id'], player2['user_id']]]
+        }
+
+    return None
+
+
+def find_ffa_match(players, game_id, player_count):
+    """
+    Find players for free-for-all match (no teams, no skill balancing needed)
+    """
+    if len(players) < player_count:
+        return None
+
+    # Simply take first N players (prioritized by queue order)
+    selected_players = players[:player_count]
+    leftover_players = players[player_count:]
+
+    # Enrich with skill levels
+    for player in selected_players:
+        player['skill_level'] = player['skill_levels'].get(game_id, 5)
+
+    return {
+        'players': selected_players,  # All players in one group
+        'team1': selected_players,  # Store as team1 for compatibility
+        'team2': [],  # No team2 in FFA
+        'imbalance': 0,  # No balancing in FFA
+        'combo_id': frozenset([frozenset([p['user_id'] for p in selected_players])]),
+        'leftover_players': leftover_players
+    }
+
+
 def create_match_from_queue(online_players, game_id, used_combinations=None):
     """
     Create a match from the queue of online players for a specific game
-
-    Args:
-        online_players: List of online players sorted by priority
-        game_id: Game identifier
-        used_combinations: Set of recently used team combinations
-
-    Returns:
-        dict with match info or None
+    Handles team-based, 1v1, and FFA games
     """
     game_info = config.GAMES[game_id]
-    team_size = game_info['team_size']
-    match_size = team_size * 2
+    match_type = game_info.get('match_type', 'team')  # 'team', '1v1', or 'ffa'
 
-    if len(online_players) < match_size:
+    # Handle different match types
+    if match_type == '1v1':
+        return find_1v1_match(online_players, game_id)
+
+    elif match_type == 'ffa':
+        player_count = game_info['team_size']  # For FFA, team_size is total players
+        return find_ffa_match(online_players, game_id, player_count)
+
+    else:  # Standard team-based game
+        team_size = game_info['team_size']
+        match_size = team_size * 2
+
+        if len(online_players) < match_size:
+            return None
+
+        # Try with minimum players first
+        max_queue_size = min(len(online_players), match_size + config.MAX_QUEUE_EXPANSION)
+
+        for queue_size in range(match_size, max_queue_size + 1):
+            candidate_players = online_players[:queue_size]
+            result = find_balanced_teams(candidate_players, game_id, team_size, used_combinations)
+
+            if result:
+                team1, team2, imbalance, combo_id = result
+
+                # Check if imbalance is acceptable
+                if imbalance <= config.SKILL_IMBALANCE_THRESHOLD or queue_size == len(online_players):
+                    # Determine which players were left out
+                    matched_ids = set(p['user_id'] for p in team1 + team2)
+                    leftover_players = [p for p in candidate_players if p['user_id'] not in matched_ids]
+
+                    return {
+                        'team1': team1,
+                        'team2': team2,
+                        'imbalance': imbalance,
+                        'combo_id': combo_id,
+                        'leftover_players': leftover_players
+                    }
+
         return None
-
-    # Try with minimum players first
-    max_queue_size = min(len(online_players), match_size + config.MAX_QUEUE_EXPANSION)
-
-    for queue_size in range(match_size, max_queue_size + 1):
-        candidate_players = online_players[:queue_size]
-        result = find_balanced_teams(candidate_players, game_id, team_size, used_combinations)
-
-        if result:
-            team1, team2, imbalance, combo_id = result
-
-            # Check if imbalance is acceptable
-            if imbalance <= config.SKILL_IMBALANCE_THRESHOLD or queue_size == len(online_players):
-                # Determine which players were left out
-                matched_ids = set(p['user_id'] for p in team1 + team2)
-                leftover_players = [p for p in candidate_players if p['user_id'] not in matched_ids]
-
-                return {
-                    'team1': team1,
-                    'team2': team2,
-                    'imbalance': imbalance,
-                    'combo_id': combo_id,
-                    'leftover_players': leftover_players
-                }
-
-    return None

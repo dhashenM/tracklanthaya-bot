@@ -29,7 +29,7 @@ GAMES = {
         'emoji': '👽',
         'team_size': 3,
         'category_name': '👽 Halo: Team Slayer',
-        'sheet_score_col': 'Halo: TS_Score',  # Column header in sheet
+        'sheet_score_col': 'Halo: TS_Score',
         'sheet_matches_col': 'Halo: TS_Matches'
     },
     'cod_bo3': {
@@ -54,10 +54,11 @@ GAMES = {
         'name': 'Mortal Kombat 11',
         'short_name': 'MK11',
         'emoji': '🥊',
-        'team_size': 1,
+        'team_size': 1,  # 1v1
         'category_name': '🥊 Mortal Kombat 11',
         'sheet_score_col': 'MK11_Score',
-        'sheet_matches_col': 'MK11_Matches'
+        'sheet_matches_col': 'MK11_Matches',
+        'match_type': '1v1'  # Add this
     },
     'cod_mw': {
         'name': 'CoD 4: MW - Search and Destroy',
@@ -76,6 +77,16 @@ GAMES = {
         'category_name': '🚗 Rocket League',
         'sheet_score_col': 'RL_Score',
         'sheet_matches_col': 'RL_Matches'
+    },
+    'nfs_mw': {  # NEW GAME
+        'name': 'Need For Speed: Most Wanted',
+        'short_name': 'NFS: MW',
+        'emoji': '🏎️',
+        'team_size': 8,  # 8 players total (not divided into teams)
+        'category_name': '🏎️ NFS: Most Wanted',
+        'sheet_score_col': 'NFS: MW_Score',
+        'sheet_matches_col': 'NFS: MW_Matches',
+        'match_type': 'ffa'  # Free-for-all
     }
 }
 

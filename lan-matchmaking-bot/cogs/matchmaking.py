@@ -105,6 +105,7 @@ class MatchmakingCommands(commands.Cog):
     async def notify_admin_new_match(self, guild, game_id: str, match: dict):
         """Notify admin about new match"""
         game_info = config.GAMES[game_id]
+        match_type = game_info.get('match_type', 'team')
 
         # Update upcoming matches channel
         cm = get_channel_manager(self.bot)
@@ -121,17 +122,10 @@ class MatchmakingCommands(commands.Cog):
         channel = cm.get_channel(guild, game_id, 'general')
 
         if not channel:
-            # Fallback to first text channel
             channel = guild.text_channels[0] if guild.text_channels else None
 
         if not channel:
             return
-
-        team1_names = ", ".join([p['username'] for p in match['team1']])
-        team2_names = ", ".join([p['username'] for p in match['team2']])
-
-        team1_skill = sum(p['skill_level'] for p in match['team1'])
-        team2_skill = sum(p['skill_level'] for p in match['team2'])
 
         embed = discord.Embed(
             title=f"{game_info['emoji']} {game_info['name']} - New Match Ready!",
@@ -139,23 +133,70 @@ class MatchmakingCommands(commands.Cog):
             color=discord.Color.orange()
         )
 
-        embed.add_field(
-            name=f"🔴 Team 1 (Skill: {team1_skill})",
-            value=team1_names,
-            inline=False
-        )
+        # Different display for different match types
+        if match_type == 'ffa':
+            # Free-for-all
+            all_players = match['team1']
+            player_names = ", ".join([p['username'] for p in all_players])
+            avg_skill = sum(p['skill_level'] for p in all_players) / len(all_players)
 
-        embed.add_field(
-            name=f"🔵 Team 2 (Skill: {team2_skill})",
-            value=team2_names,
-            inline=False
-        )
+            embed.add_field(
+                name=f"🏁 {len(all_players)} Players",
+                value=player_names,
+                inline=False
+            )
+            embed.add_field(
+                name="⚖️ Average Skill",
+                value=f"{avg_skill:.1f}/10",
+                inline=False
+            )
 
-        embed.add_field(
-            name="⚖️ Balance",
-            value=f"Skill Imbalance: {match['imbalance']}",
-            inline=False
-        )
+        elif match_type == '1v1':
+            # 1v1
+            player1 = match['team1'][0]
+            player2 = match['team2'][0]
+
+            embed.add_field(
+                name="🥊 Player 1",
+                value=f"{player1['username']} (Skill: {player1['skill_level']}/10)",
+                inline=True
+            )
+            embed.add_field(
+                name="🥊 Player 2",
+                value=f"{player2['username']} (Skill: {player2['skill_level']}/10)",
+                inline=True
+            )
+            embed.add_field(
+                name="⚖️ Skill Difference",
+                value=f"{match['imbalance']:.1f}",
+                inline=False
+            )
+
+        else:
+            # Team-based
+            team1_names = ", ".join([p['username'] for p in match['team1']])
+            team2_names = ", ".join([p['username'] for p in match['team2']])
+
+            team1_skill = sum(p['skill_level'] for p in match['team1'])
+            team2_skill = sum(p['skill_level'] for p in match['team2'])
+
+            embed.add_field(
+                name="🔴 Team 1 (Skill: {})".format(team1_skill),
+                value=team1_names,
+                inline=False
+            )
+
+            embed.add_field(
+                name="🔵 Team 2 (Skill: {})".format(team2_skill),
+                value=team2_names,
+                inline=False
+            )
+
+            embed.add_field(
+                name="⚖️ Balance",
+                value=f"Skill Imbalance: {match['imbalance']}",
+                inline=False
+            )
 
         embed.set_footer(text=f"Match ID: {match['_id']}\nUse /startmatch")
 
@@ -189,6 +230,7 @@ class MatchmakingCommands(commands.Cog):
     async def create_match_channels(self, guild, game_id: str, match: dict):
         """Create voice and text channels for the match"""
         game_info = config.GAMES[game_id]
+        match_type = game_info.get('match_type', 'team')
 
         # Find game category
         category = discord.utils.get(guild.categories, name=game_info['category_name'])
@@ -197,66 +239,142 @@ class MatchmakingCommands(commands.Cog):
             print(f"⚠️ Category not found for {game_info['name']}")
             return
 
-        # Create Team 1 channels
-        team1_voice = await guild.create_voice_channel(
-            config.TEAM1_CHANNEL_NAME,
-            category=category
-        )
-        team1_text = await guild.create_text_channel(
-            "🔴│team-1-chat",
-            category=category
-        )
+        # For FFA games, create only one set of channels
+        if match_type == 'ffa':
+            # Create single voice and text channel for all players
+            match_voice = await guild.create_voice_channel(
+                f"{game_info['emoji']} Match Lobby",
+                category=category
+            )
+            match_text = await guild.create_text_channel(
+                f"{game_info['emoji'].lower()}│match-chat",
+                category=category
+            )
 
-        # Create Team 2 channels
-        team2_voice = await guild.create_voice_channel(
-            config.TEAM2_CHANNEL_NAME,
-            category=category
-        )
-        team2_text = await guild.create_text_channel(
-            "🔵│team-2-chat",
-            category=category
-        )
+            # Store channel references
+            if game_id not in self.match_channels:
+                self.match_channels[game_id] = {}
 
-        # Store channel references
-        if game_id not in self.match_channels:
-            self.match_channels[game_id] = {}
+            match_id = str(match['_id'])
+            self.match_channels[game_id][match_id] = [match_voice, match_text]
 
-        match_id = str(match['_id'])
-        self.match_channels[game_id][match_id] = [team1_voice, team1_text, team2_voice, team2_text]
+            # Set permissions for all players
+            all_players = match['team1']  # In FFA, all players are in team1
+            for player in all_players:
+                member = guild.get_member(player['user_id'])
+                if member:
+                    await match_voice.set_permissions(member, connect=True, speak=True, view_channel=True)
+                    await match_text.set_permissions(member, read_messages=True, send_messages=True)
 
-        # Set permissions for Team 1
-        for player in match['team1']:
-            member = guild.get_member(player['user_id'])
-            if member:
-                await team1_voice.set_permissions(member, connect=True, speak=True, view_channel=True)
-                await team1_text.set_permissions(member, read_messages=True, send_messages=True)
-                await team2_voice.set_permissions(member, connect=False, view_channel=False)
-                await team2_text.set_permissions(member, read_messages=False)
+            # Send welcome message
+            player_mentions = " ".join([f"<@{p['user_id']}>" for p in all_players])
 
-        # Set permissions for Team 2
-        for player in match['team2']:
-            member = guild.get_member(player['user_id'])
-            if member:
-                await team2_voice.set_permissions(member, connect=True, speak=True, view_channel=True)
-                await team2_text.set_permissions(member, read_messages=True, send_messages=True)
-                await team1_voice.set_permissions(member, connect=False, view_channel=False)
-                await team1_text.set_permissions(member, read_messages=False)
+            await match_text.send(
+                f"{game_info['emoji']} **Free-For-All Match - GO!**\n{player_mentions}\n\n"
+                f"Join the voice channel and may the best racer win!"
+            )
 
-        # Send welcome messages
-        team1_mentions = " ".join([f"<@{p['user_id']}>" for p in match['team1']])
-        team2_mentions = " ".join([f"<@{p['user_id']}>" for p in match['team2']])
+            return match_voice, match_text
 
-        await team1_text.send(
-            f"🔴 **Team 1 - Let's go!**\n{team1_mentions}\n\n"
-            f"Join your voice channel and coordinate your strategy!"
-        )
+        # For 1v1, create simple channels
+        elif match_type == '1v1':
+            match_voice = await guild.create_voice_channel(
+                f"{game_info['emoji']} Match Arena",
+                category=category
+            )
+            match_text = await guild.create_text_channel(
+                f"{game_info['emoji'].lower()}│match-chat",
+                category=category
+            )
 
-        await team2_text.send(
-            f"🔵 **Team 2 - Let's go!**\n{team2_mentions}\n\n"
-            f"Join your voice channel and coordinate your strategy!"
-        )
+            if game_id not in self.match_channels:
+                self.match_channels[game_id] = {}
 
-        return team1_voice, team1_text, team2_voice, team2_text
+            match_id = str(match['_id'])
+            self.match_channels[game_id][match_id] = [match_voice, match_text]
+
+            # Set permissions for both players
+            all_players = match['team1'] + match['team2']
+            for player in all_players:
+                member = guild.get_member(player['user_id'])
+                if member:
+                    await match_voice.set_permissions(member, connect=True, speak=True, view_channel=True)
+                    await match_text.set_permissions(member, read_messages=True, send_messages=True)
+
+            # Send welcome message
+            player1_mention = f"<@{match['team1'][0]['user_id']}>"
+            player2_mention = f"<@{match['team2'][0]['user_id']}>"
+
+            await match_text.send(
+                f"{game_info['emoji']} **1v1 Match!**\n"
+                f"{player1_mention} vs {player2_mention}\n\n"
+                f"Good luck!"
+            )
+
+            return match_voice, match_text
+
+        # Standard team-based game (existing code)
+        else:
+            # Create Team 1 channels
+            team1_voice = await guild.create_voice_channel(
+                config.TEAM1_CHANNEL_NAME,
+                category=category
+            )
+            team1_text = await guild.create_text_channel(
+                "🔴│team-1-chat",
+                category=category
+            )
+
+            # Create Team 2 channels
+            team2_voice = await guild.create_voice_channel(
+                config.TEAM2_CHANNEL_NAME,
+                category=category
+            )
+            team2_text = await guild.create_text_channel(
+                "🔵│team-2-chat",
+                category=category
+            )
+
+            # Store channel references
+            if game_id not in self.match_channels:
+                self.match_channels[game_id] = {}
+
+            match_id = str(match['_id'])
+            self.match_channels[game_id][match_id] = [team1_voice, team1_text, team2_voice, team2_text]
+
+            # Set permissions for Team 1
+            for player in match['team1']:
+                member = guild.get_member(player['user_id'])
+                if member:
+                    await team1_voice.set_permissions(member, connect=True, speak=True, view_channel=True)
+                    await team1_text.set_permissions(member, read_messages=True, send_messages=True)
+                    await team2_voice.set_permissions(member, connect=False, view_channel=False)
+                    await team2_text.set_permissions(member, read_messages=False)
+
+            # Set permissions for Team 2
+            for player in match['team2']:
+                member = guild.get_member(player['user_id'])
+                if member:
+                    await team2_voice.set_permissions(member, connect=True, speak=True, view_channel=True)
+                    await team2_text.set_permissions(member, read_messages=True, send_messages=True)
+                    await team1_voice.set_permissions(member, connect=False, view_channel=False)
+                    await team1_text.set_permissions(member, read_messages=False)
+
+            # Send welcome messages
+            team1_mentions = " ".join([f"<@{p['user_id']}>" for p in match['team1']])
+            team2_mentions = " ".join([f"<@{p['user_id']}>" for p in match['team2']])
+
+            await team1_text.send(
+                f"🔴 **Team 1 - Let's go!**\n{team1_mentions}\n\n"
+                f"Join your voice channel and coordinate your strategy!"
+            )
+
+            await team2_text.send(
+                f"🔵 **Team 2 - Let's go!**\n{team2_mentions}\n\n"
+                f"Join your voice channel and coordinate your strategy!"
+            )
+
+            return team1_voice, team1_text, team2_voice, team2_text
 
     async def delete_match_channels(self, game_id: str, match_id: str):
         """Delete channels for a match"""
