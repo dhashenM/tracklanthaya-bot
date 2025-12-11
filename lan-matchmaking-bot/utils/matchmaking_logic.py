@@ -1,6 +1,6 @@
 from itertools import combinations
 import config
-
+from utils.database import db
 
 def calculate_team_balance(players, team1_indices, team_size):
     """
@@ -137,24 +137,26 @@ def find_ffa_match(players, game_id, player_count):
     }
 
 
-def create_match_from_queue(online_players, game_id, used_combinations=None):
+async def create_match_from_queue(online_players, game_id, used_combinations=None):
     """
     Create a match from the queue of online players for a specific game
     Handles team-based, 1v1, and FFA games
     """
     game_info = config.GAMES[game_id]
-    match_type = game_info.get('match_type', 'team')  # 'team', '1v1', or 'ffa'
+    match_type = game_info.get('match_type', 'team')
+
+    # Get custom team size from database (or use default)
+    team_size = await db.get_team_size(game_id)
 
     # Handle different match types
     if match_type == '1v1':
         return find_1v1_match(online_players, game_id)
 
     elif match_type == 'ffa':
-        player_count = game_info['team_size']  # For FFA, team_size is total players
-        return find_ffa_match(online_players, game_id, player_count)
+        # For FFA, team_size is total players
+        return find_ffa_match(online_players, game_id, team_size)
 
     else:  # Standard team-based game
-        team_size = game_info['team_size']
         match_size = team_size * 2
 
         if len(online_players) < match_size:

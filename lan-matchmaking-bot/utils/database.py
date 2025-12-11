@@ -217,8 +217,30 @@ class Database:
         """Set which games are enabled"""
         await self.set_system_setting('enabled_games', game_ids)
 
+    async def get_game_config(self, game_id: str):
+        """Get custom configuration for a game"""
+        config_doc = await self.db.game_configs.find_one({'game_id': game_id})
+        return config_doc if config_doc else {}
 
+    async def set_game_config(self, game_id: str, config_data: dict):
+        """Set custom configuration for a game"""
+        await self.db.game_configs.update_one(
+            {'game_id': game_id},
+            {'$set': {**config_data, 'game_id': game_id}},
+            upsert=True
+        )
 
+    async def get_team_size(self, game_id: str):
+        """Get team size for a game (custom or default)"""
+        game_config = await self.get_game_config(game_id)
+        if 'team_size' in game_config:
+            return game_config['team_size']
+        # Return default from config
+        return config.GAMES[game_id]['team_size']
+
+    async def set_team_size(self, game_id: str, team_size: int):
+        """Set custom team size for a game"""
+        await self.set_game_config(game_id, {'team_size': team_size})
 
 # Global database instance
 db = Database()

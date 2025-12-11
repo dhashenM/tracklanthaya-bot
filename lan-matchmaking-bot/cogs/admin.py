@@ -828,6 +828,193 @@ class AdminCommands(commands.Cog):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @app_commands.command(name="setteamsize", description="[ADMIN] Change team size for a game")
+    @app_commands.describe(team_size="New team size (e.g., 3 for 3v3, 8 for 8-player FFA)")
+    @app_commands.default_permissions(administrator=True)
+    @is_admin()
+    async def set_team_size(self, interaction: discord.Interaction, team_size: int):
+        """Set custom team size for a game"""
+        await interaction.response.defer()
+
+        enabled_games = await db.get_enabled_games()
+
+        if not enabled_games:
+            await interaction.followup.send(
+                "❌ No games are currently enabled!",
+                ephemeral=True
+            )
+            return
+
+        # Validate team size
+        if team_size < 1 or team_size > 16:
+            await interaction.followup.send(
+                "❌ Team size must be between 1 and 16!",
+                ephemeral=True
+            )
+            return
+
+        # Store team size for callback
+        self.temp_team_size = team_size
+
+        # Show game selection
+        view = GameSelectViewAdmin(
+            f"set team size to {team_size}",
+            enabled_games,
+            self.handle_setteamsize_selection,
+            max_selections=1
+        )
+        await interaction.followup.send(
+            f"🎮 Select which game to set team size to **{team_size}**:",
+            view=view,
+            ephemeral=True
+        )
+
+    async def handle_setteamsize_selection(self, interaction: discord.Interaction, selected_games: list):
+        """Handle setting team size after game selection"""
+        await interaction.response.defer()
+
+        game_id = selected_games[0]
+        game_info = config.GAMES[game_id]
+        match_type = game_info.get('match_type', 'team')
+        team_size = self.temp_team_size
+
+        # Check if there's an active or pending match
+        active_match = await db.get_active_match(game_id)
+        pending_match = await db.get_pending_match(game_id)
+
+        if active_match or pending_match:
+            await interaction.followup.send(
+                f"❌ Cannot change team size for **{game_info['name']}** while there's an active or pending match!\n"
+                f"Please end/cancel the current match first.",
+                ephemeral=True
+            )
+            return
+
+        # Save to database
+        await db.set_team_size(game_id, team_size)
+
+        # Build response based on match type
+        if match_type == 'ffa':
+            message = f"✅ Set **{game_info['name']}** to **{team_size}-player Free-For-All**"
+        elif match_type == '1v1':
+            message = f"✅ Team size setting doesn't apply to 1v1 games, but saved for consistency."
+        else:
+            message = f"✅ Set **{game_info['name']}** to **{team_size}v{team_size}** (total: {team_size * 2} players)"
+
+        await interaction.followup.send(message)
+
+        # Clear any existing queue for this game (since team size changed)
+        players = await db.get_all_players()
+        for player in players:
+            queue_status = player.get('queue_status', {})
+            if queue_status.get(game_id) == 'online':
+                queue_status[game_id] = 'offline'
+                await db.update_player(player['user_id'], {'queue_status': queue_status})
+
+        # Update queue channel
+        cm = get_channel_manager(self.bot)
+        await cm.update_queue(interaction.guild, game_id)
+
+        # Notify in general channel
+        general_channel = cm.get_channel(interaction.guild, game_id, 'general')
+        if general_channel:
+            if match_type == 'ffa':
+                notify_text = f"⚙️ **Team size changed!**\n{game_info['emoji']} {game_info['name']} is now **{team_size}-player FFA**\n\nAll players have been removed from queue. Please join again!"
+            elif match_type != '1v1':
+                notify_text = f"⚙️ **Team size changed!**\n{game_info['emoji']} {game_info['name']} is now **{team_size}v{team_size}**\n\nAll players have been removed from queue. Please join again!"
+            else:
+                notify_text = None
+
+            if notify_text:
+                await general_channel.send(notify_text)
+
+    @app_commands.command(name="viewteamsize", description="[ADMIN] View current team sizes")
+    @app_commands.default_permissions(administrator=True)
+    @is_admin()
+    async def view_team_size(self, interaction: discord.Interaction):
+        """View current team sizes for all games"""
+        embed = discord.Embed(
+            title="⚙️ Current Team Sizes",
+            description="Team size configuration for all games",
+            color=discord.Color.blue()
+        )
+
+        for game_id, game_info in config.GAMES.items():
+            match_type = game_info.get('match_type', 'team')
+            current_size = await db.get_team_size(game_id)
+            default_size = game_info['team_size']
+
+            # Build display text
+            if match_type == 'ffa':
+                size_text = f"**{current_size}-player FFA**"
+            elif match_type == '1v1':
+                size_text = "**1v1** (fixed)"
+            else:
+                size_text = f"**{current_size}v{current_size}** (total: {current_size * 2})"
+
+            # Show if custom
+            if current_size != default_size:
+                size_text += f" ⚙️\n_Default: {default_size}_"
+
+            embed.add_field(
+                name=f"{game_info['emoji']} {game_info['short_name']}",
+                value=size_text,
+                inline=True
+            )
+
+        embed.set_footer(text="⚙️ = Custom size set | Use /setteamsize to change")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="resetteamsize", description="[ADMIN] Reset team size to default")
+    @app_commands.default_permissions(administrator=True)
+    @is_admin()
+    async def reset_team_size(self, interaction: discord.Interaction):
+        """Reset team size to default for a game"""
+        await interaction.response.defer()
+
+        enabled_games = await db.get_enabled_games()
+
+        if not enabled_games:
+            await interaction.followup.send(
+                "❌ No games are currently enabled!",
+                ephemeral=True
+            )
+            return
+
+        # Show game selection
+        view = GameSelectViewAdmin(
+            "reset team size",
+            enabled_games,
+            self.handle_resetteamsize_selection,
+            max_selections=1
+        )
+        await interaction.followup.send(
+            "🎮 Select which game to reset to default team size:",
+            view=view,
+            ephemeral=True
+        )
+
+    async def handle_resetteamsize_selection(self, interaction: discord.Interaction, selected_games: list):
+        """Handle resetting team size after game selection"""
+        await interaction.response.defer()
+
+        game_id = selected_games[0]
+        game_info = config.GAMES[game_id]
+        default_size = game_info['team_size']
+
+        # Remove custom config
+        await db.db.game_configs.delete_one({'game_id': game_id})
+
+        match_type = game_info.get('match_type', 'team')
+        if match_type == 'ffa':
+            message = f"✅ Reset **{game_info['name']}** to default: **{default_size}-player FFA**"
+        elif match_type == '1v1':
+            message = f"✅ **{game_info['name']}** is already at default (1v1)"
+        else:
+            message = f"✅ Reset **{game_info['name']}** to default: **{default_size}v{default_size}**"
+
+        await interaction.followup.send(message)
 
 async def setup(bot):
     """Load the cog"""

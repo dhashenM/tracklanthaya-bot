@@ -114,11 +114,26 @@ class MultiGameChannelManager:
             return
 
         game_info = config.GAMES[game_id]
+        match_type = game_info.get('match_type', 'team')
         online_players = await db.get_online_players(game_id)
+
+        # Get current team size
+        current_team_size = await db.get_team_size(game_id)
+
+        # Calculate required players
+        if match_type == 'ffa':
+            required_players = current_team_size
+            size_display = f"{current_team_size}-player FFA"
+        elif match_type == '1v1':
+            required_players = 2
+            size_display = "1v1"
+        else:
+            required_players = current_team_size * 2
+            size_display = f"{current_team_size}v{current_team_size}"
 
         embed = discord.Embed(
             title=f"{game_info['emoji']} {game_info['short_name']} - Queue",
-            description=f"Players waiting: **{len(online_players)}**",
+            description=f"**{size_display}** | Players waiting: **{len(online_players)}/{required_players}**",
             color=discord.Color.green(),
             timestamp=datetime.utcnow()
         )
@@ -128,7 +143,14 @@ class MultiGameChannelManager:
             for i, player in enumerate(online_players, 1):
                 stats = await db.get_game_stats(player['user_id'], game_id)
                 priority_star = "⭐" if stats.get('queue_priority', 0) > 0 else ""
-                skill = player['skill_levels'].get(game_id, 5)
+
+                # Handle old players without skill_levels
+                skill_levels = player.get('skill_levels', {})
+                if isinstance(skill_levels, dict):
+                    skill = skill_levels.get(game_id, 5)
+                else:
+                    skill = 5
+
                 queue_text += f"{i}. {priority_star}**{player['username']}** (Skill: {skill}/10)\n"
             embed.add_field(name="Players in Queue", value=queue_text, inline=False)
             embed.set_footer(text="⭐ = Priority • Updated")
@@ -136,8 +158,11 @@ class MultiGameChannelManager:
             embed.add_field(name="Queue Status", value="*Queue is empty*", inline=False)
             embed.set_footer(text="Updated")
 
-        await channel.purge(limit=100)
-        await channel.send(embed=embed)
+        try:
+            await channel.purge(limit=100)
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"Error updating queue channel: {e}")
 
     async def update_leaderboard(self, guild, game_id: str):
         """Update leaderboard channel for specific game"""

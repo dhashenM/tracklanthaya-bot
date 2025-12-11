@@ -106,6 +106,7 @@ class MatchmakingCommands(commands.Cog):
         """Notify admin about new match"""
         game_info = config.GAMES[game_id]
         match_type = game_info.get('match_type', 'team')
+        current_team_size = await db.get_team_size(game_id)
 
         # Update upcoming matches channel
         cm = get_channel_manager(self.bot)
@@ -141,7 +142,7 @@ class MatchmakingCommands(commands.Cog):
             avg_skill = sum(p['skill_level'] for p in all_players) / len(all_players)
 
             embed.add_field(
-                name=f"🏁 {len(all_players)} Players",
+                name=f"🏁 {len(all_players)}/{current_team_size} Players",
                 value=player_names,
                 inline=False
             )
@@ -181,13 +182,13 @@ class MatchmakingCommands(commands.Cog):
             team2_skill = sum(p['skill_level'] for p in match['team2'])
 
             embed.add_field(
-                name="🔴 Team 1 (Skill: {})".format(team1_skill),
+                name=f"🔴 Team 1 ({len(match['team1'])}/{current_team_size}) - Skill: {team1_skill}",
                 value=team1_names,
                 inline=False
             )
 
             embed.add_field(
-                name="🔵 Team 2 (Skill: {})".format(team2_skill),
+                name=f"🔵 Team 2 ({len(match['team2'])}/{current_team_size}) - Skill: {team2_skill}",
                 value=team2_names,
                 inline=False
             )
