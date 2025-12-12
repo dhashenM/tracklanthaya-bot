@@ -363,6 +363,32 @@ async def setup_total(ctx):
     except Exception as e:
         await ctx.send(f"❌ Error: {e}")
 
+
+@bot.command(name='cleanupdupes')
+@commands.is_owner()
+async def cleanup_dupes(ctx):
+    """Remove duplicate player entries"""
+    # Find all temp accounts
+    temp_accounts = await db.db.players.find({'temp_account': True}).to_list(length=None)
+
+    deleted = 0
+    for temp in temp_accounts:
+        username = temp['username']
+
+        # Check if there's a real account with same username
+        real_account = await db.db.players.find_one({
+            'username': username,
+            'temp_account': {'$ne': True}
+        })
+
+        if real_account:
+            # Delete the temp account
+            await db.db.players.delete_one({'_id': temp['_id']})
+            deleted += 1
+            await ctx.send(f"🗑️ Removed duplicate temp account for {username}")
+
+    await ctx.send(f"✅ Cleanup complete! Removed {deleted} duplicate(s)")
+
 # Run the bot
 if __name__ == "__main__":
     try:

@@ -68,11 +68,44 @@ class PlayerCommands(commands.Cog):
             )
             return
 
-        await db.create_player(interaction.user.id, interaction.user.name)
-        await interaction.response.send_message(
-            "✅ Registration successful! Use `/setskill` to set your skill levels for each game.",
-            ephemeral=True
-        )
+        # Check if there's a pre-configured account with matching username
+        existing_temp = await db.db.players.find_one({
+            'username': interaction.user.name,
+            'temp_account': True
+        })
+
+        if existing_temp:
+            # Found pre-configured account - convert it to real account
+            skill_levels = existing_temp.get('skill_levels', {})
+            queue_status = existing_temp.get('queue_status', {})
+
+            # Delete the temp account
+            await db.db.players.delete_one({'_id': existing_temp['_id']})
+
+            # Create real account with the skills
+            await db.create_player(interaction.user.id, interaction.user.name)
+
+            # Update with pre-configured skills
+            await db.update_player(interaction.user.id, {
+                'skill_levels': skill_levels,
+                'queue_status': queue_status
+            })
+
+            skill_count = len(skill_levels)
+
+            await interaction.response.send_message(
+                f"✅ Registration successful!\n\n"
+                f"Your account has been linked with pre-configured skills for {skill_count} game(s).\n"
+                f"Use `/profile` to view your skills or `/setskill` to adjust them.",
+                ephemeral=True
+            )
+        else:
+            # Normal registration (no pre-configured account found)
+            await db.create_player(interaction.user.id, interaction.user.name)
+            await interaction.response.send_message(
+                "✅ Registration successful! Use `/setskill` to set your skill levels (1-10).",
+                ephemeral=True
+            )
 
     @app_commands.command(name="setskill", description="Set your skill level for games (1-10)")
     async def setskill(self, interaction: discord.Interaction):
